@@ -295,8 +295,17 @@ class PyTorchSTTBackend:
             model_name = WHISPER_HF_REPOS.get(model_size, f"openai/whisper-{model_size}")
             logger.info("Loading Whisper model %s on %s...", model_size, self.device)
 
-            self.processor = WhisperProcessor.from_pretrained(model_name)
-            self.model = WhisperForConditionalGeneration.from_pretrained(model_name)
+            # Avoid HuggingFace revision/update checks when the selected model
+            # is already complete in the local cache. Missing models still use
+            # the normal online download path.
+            self.processor = WhisperProcessor.from_pretrained(
+                model_name,
+                local_files_only=is_cached,
+            )
+            self.model = WhisperForConditionalGeneration.from_pretrained(
+                model_name,
+                local_files_only=is_cached,
+            )
 
         self.model.to(self.device)
         self.model_size = model_size

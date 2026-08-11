@@ -183,9 +183,32 @@ When the speaker dictates a punctuation word inside a technical term, convert it
 For example, "run npm install then cd into src slash components and edit index dot tsx" yields "Run npm install then cd into src/components and edit index.tsx.\""""
 
 
-def build_refinement_prompt(flags: RefinementFlags) -> str:
+_LANGUAGE_NAMES = {
+    "en": "English",
+    "zh": "Chinese",
+    "ja": "Japanese",
+    "ko": "Korean",
+    "de": "German",
+    "fr": "French",
+    "ru": "Russian",
+    "pt": "Portuguese",
+    "es": "Spanish",
+    "it": "Italian",
+    "hi": "Hindi",
+}
+
+
+def build_refinement_prompt(flags: RefinementFlags, language: str | None = None) -> str:
     """Assemble the system prompt for a given flag combination."""
     sections = [_BASE_INSTRUCTIONS]
+
+    if language:
+        language_name = _LANGUAGE_NAMES.get(language, language)
+        sections.append(
+            f"The transcript language is {language_name} ({language}). "
+            "Keep the refined output in that language. Do not translate it or "
+            "default to English."
+        )
 
     if flags.smart_cleanup:
         sections.append(_SMART_CLEANUP)
@@ -269,6 +292,7 @@ async def refine_transcript(
     transcript: str,
     flags: RefinementFlags,
     model_size: str | None = None,
+    language: str | None = None,
 ) -> tuple[str, str]:
     """Run the transcript through the LLM with the built system prompt.
 
@@ -283,13 +307,18 @@ async def refine_transcript(
     # to reason about obvious STT garbage (see ``collapse_repetitive_artifacts``).
     cleaned_input = collapse_repetitive_artifacts(transcript)
 
-    system_prompt = build_refinement_prompt(flags)
+    system_prompt = build_refinement_prompt(flags, language=language)
+    # English-only few-shot examples strongly bias the smaller Qwen models
+    # toward English. They are useful for English refinement, but for an
+    # explicitly selected non-English language the language instruction and
+    # original transcript are the safer anchors.
+    examples = REFINEMENT_EXAMPLES if language in (None, "en") else None
     text = await backend.generate(
         prompt=cleaned_input,
         system=system_prompt,
         max_tokens=2048,
         temperature=0.2,
         model_size=resolved_size,
-        examples=REFINEMENT_EXAMPLES,
+        examples=examples,
     )
     return text.strip(), resolved_size

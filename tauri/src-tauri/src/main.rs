@@ -263,6 +263,22 @@ async fn probe_binary_version(exe: &std::path::Path, cwd: &std::path::Path) -> O
     }
 }
 
+/// Patch releases in the same major/minor series share the backend protocol.
+/// Desktop-only hotfix installers may therefore use an existing CUDA/ROCm
+/// backend without forcing a multi-gigabyte re-download.
+fn backend_version_compatible(app_version: &str, binary_version: Option<&str>) -> bool {
+    let Some(binary_version) = binary_version else {
+        return false;
+    };
+    if app_version == binary_version {
+        return true;
+    }
+
+    let app_series: Vec<&str> = app_version.split('.').take(2).collect();
+    let binary_series: Vec<&str> = binary_version.split('.').take(2).collect();
+    app_series.len() == 2 && app_series == binary_series
+}
+
 #[command]
 async fn start_server(
     app: tauri::AppHandle,
@@ -412,9 +428,33 @@ async fn start_server(
         .app_data_dir()
         .map_err(|e| format!("Failed to get app data dir: {}", e))?;
 
-    // Ensure data directory exists
-    std::fs::create_dir_all(&data_dir)
-        .map_err(|e| format!("Failed to create data dir: {}", e))?;
+    // `create_dir_all` returns ERROR_ALREADY_EXISTS (183) for an existing
+    // directory junction on Windows. Voicebox supports relocating its data
+    // directory through a junction, so only create the path when it does not
+    // already resolve to a directory.
+    // `is_dir()` and `exists()` follow reparse points and can report false for
+    // an otherwise valid Windows junction.  Inspect the directory entry itself
+    // so relocated app-data junctions are accepted without calling
+    // create_dir_all (which would return ERROR_ALREADY_EXISTS / os error 183).
+    match std::fs::symlink_metadata(&data_dir) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            if let Err(create_error) = std::fs::create_dir_all(&data_dir) {
+                // Windows can race or disagree when resolving a junction:
+                // metadata reports NotFound, then creation reports that the
+                // reparse-point entry already exists.  That is the desired
+                // state for this path, so do not fail startup on error 183.
+                let already_exists = create_error.kind() == std::io::ErrorKind::AlreadyExists
+                    || create_error.raw_os_error() == Some(183);
+                if !already_exists {
+                    return Err(format!("Failed to create data dir: {}", create_error));
+                }
+            }
+        }
+        Err(error) => {
+            return Err(format!("Failed to inspect data dir: {}", error));
+        }
+    }
 
     println!("=================================================================");
     println!("Starting voicebox-server sidecar");
@@ -436,7 +476,7 @@ async fn start_server(
             let app_version = app.config().version.clone().unwrap_or_default();
             let binary_version = probe_binary_version(&exe_path, &rocm_dir).await;
             let version_ok = if !app_version.is_empty()
-                && binary_version.as_deref() == Some(app_version.as_str())
+                && backend_version_compatible(&app_version, binary_version.as_deref())
             {
                 println!("ROCm binary version {} matches app version", app_version);
                 true
@@ -477,7 +517,7 @@ async fn start_server(
             let app_version = app.config().version.clone().unwrap_or_default();
             let binary_version = probe_binary_version(&exe_path, &cuda_dir).await;
             let version_ok = if !app_version.is_empty()
-                && binary_version.as_deref() == Some(app_version.as_str())
+                && backend_version_compatible(&app_version, binary_version.as_deref())
             {
                 println!("CUDA binary version {} matches app version", app_version);
                 true
@@ -596,12 +636,38 @@ async fn start_server(
         if gpu_spawn.is_none() {
             if let Some(ref cuda_path) = cuda_binary {
                 let cuda_dir = cuda_path.parent().unwrap();
+                let portable_dir = cuda_dir.join("python-backend");
+                let portable_python = portable_dir.join("runtime").join("python.exe");
+                let portable_launcher = portable_dir.join("launcher.py");
                 println!("Launching CUDA backend: {:?} (cwd: {:?})", cuda_path, cuda_dir);
-                let mut cmd = app.shell().command(cuda_path.to_str().unwrap());
-                cmd = cmd.current_dir(cuda_dir);
+                let portable_available = portable_python.is_file() && portable_launcher.is_file();
+                let mut cmd = if portable_available {
+                    println!("Using portable Python CUDA backend: {:?}", portable_python);
+                    let mut portable_cmd = app.shell().command(portable_python.to_str().unwrap());
+                    portable_cmd = portable_cmd.current_dir(&portable_dir);
+                    portable_cmd.args(["-S", portable_launcher.to_str().unwrap()])
+                } else {
+                    let mut frozen_cmd = app.shell().command(cuda_path.to_str().unwrap());
+                    frozen_cmd = frozen_cmd.current_dir(cuda_dir);
+                    frozen_cmd
+                };
                 cmd = cmd.args(["--data-dir", &data_dir_str, "--port", &port_str, "--parent-pid", &parent_pid_str]);
                 if is_remote { cmd = cmd.args(["--host", "0.0.0.0"]); }
                 if let Some(ref dir) = effective_models_dir { cmd = cmd.env("VOICEBOX_MODELS_DIR", dir); }
+                if portable_available {
+                    let compile_cache = data_dir.join("cache").join("torch-compile");
+                    cmd = cmd.env("VOICEBOX_TTS_OPTIMIZE", "codebook");
+                    cmd = cmd.env("HF_HUB_OFFLINE", "1");
+                    cmd = cmd.env("TRANSFORMERS_OFFLINE", "1");
+                    cmd = cmd.env(
+                        "TORCHINDUCTOR_CACHE_DIR",
+                        compile_cache.join("inductor").to_string_lossy().as_ref(),
+                    );
+                    cmd = cmd.env(
+                        "TRITON_CACHE_DIR",
+                        compile_cache.join("triton").to_string_lossy().as_ref(),
+                    );
+                }
                 match cmd.spawn() {
                     Ok(r) => { gpu_spawn = Some(Ok(r)); }
                     Err(e) => { println!("CUDA spawn failed ({}), falling back to CPU", e); }
@@ -857,19 +923,42 @@ async fn stop_server(state: State<'_, ServerState>) -> Result<(), String> {
         
         #[cfg(windows)]
         {
-            // Send graceful shutdown via HTTP — the server's parent-pid watchdog
-            // will also handle cleanup if this app process exits.
+            // Ask the server to shut down cleanly first, then terminate its
+            // complete process tree as a bounded fallback. The watchdog alone
+            // can take several seconds and may already have been disabled by a
+            // previous "keep running" session.
             println!("Sending graceful shutdown via HTTP...");
             let client = reqwest::blocking::Client::builder()
                 .timeout(std::time::Duration::from_secs(2))
                 .build()
                 .unwrap();
 
-            let _ = client
+            let shutdown_sent = client
                 .post(&format!("http://127.0.0.1:{}/shutdown", SERVER_PORT))
-                .send();
+                .send()
+                .is_ok();
 
-            println!("Shutdown request sent (server watchdog will handle cleanup)");
+            if shutdown_sent {
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            let result = std::process::Command::new("taskkill")
+                .args(["/F", "/T", "/PID", &pid.to_string()])
+                .creation_flags(CREATE_NO_WINDOW)
+                .output();
+            match result {
+                Ok(output) if output.status.success() => {
+                    println!("Server process tree {} stopped", pid)
+                }
+                Ok(output) => println!(
+                    "Server process tree {} was already stopped or could not be terminated: {}",
+                    pid,
+                    String::from_utf8_lossy(&output.stderr).trim()
+                ),
+                Err(error) => eprintln!("Failed to run taskkill for server {}: {}", pid, error),
+            }
         }
     }
     
@@ -1639,6 +1728,22 @@ pub fn run() {
                                     .output();
                                 let _ = Command::new("kill")
                                     .args(["-9", &pid.to_string()])
+                                    .output();
+                            }
+                        }
+
+                        #[cfg(windows)]
+                        {
+                            if let Some(pid) = state.server_pid.lock().unwrap().take() {
+                                // The async command cannot be awaited from this
+                                // synchronous exit callback. Kill the entire tree
+                                // so closing the UI cannot leave the sidecar or
+                                // any worker subprocess behind.
+                                use std::os::windows::process::CommandExt;
+                                const CREATE_NO_WINDOW: u32 = 0x08000000;
+                                let _ = std::process::Command::new("taskkill")
+                                    .args(["/F", "/T", "/PID", &pid.to_string()])
+                                    .creation_flags(CREATE_NO_WINDOW)
                                     .output();
                             }
                         }

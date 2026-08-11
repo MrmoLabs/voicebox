@@ -102,16 +102,19 @@ class PyTorchQwenLLMBackend:
 
         with model_load_progress(progress_model_name, is_cached):
             logger.info("Loading Qwen3 %s on %s...", model_size, self.device)
-            # Loads run with the process's default HF_HUB_OFFLINE state.
-            # Forcing offline for cached models flips process-global state
-            # and silently switches every concurrent download/load on other
-            # threads to offline mode (issue #841) — the same regression
-            # removed app-wide in #524/#530.
-            self.tokenizer = AutoTokenizer.from_pretrained(repo)
+            # A cached model must load without a Hub metadata/update check.
+            # ``local_files_only`` is scoped to this load, unlike toggling the
+            # process-global HF_HUB_OFFLINE flag, so concurrent downloads keep
+            # working normally.
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                repo,
+                local_files_only=is_cached,
+            )
             dtype = torch.float16 if self.device in ("cuda", "mps") else torch.float32
             self.model = AutoModelForCausalLM.from_pretrained(
                 repo,
                 dtype=dtype,
+                local_files_only=is_cached,
             )
             self.model.to(self.device)
             self.model.eval()
