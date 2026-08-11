@@ -18,8 +18,11 @@ QWEN_SOURCE = ROOT / "qwen-source"
 
 os.environ.setdefault("VOICEBOX_BACKEND_VARIANT", "cuda")
 os.environ.setdefault("VOICEBOX_TTS_OPTIMIZE", "codebook")
-os.environ.setdefault("HF_HUB_OFFLINE", "1")
-os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+# Voicebox 0.5.1 desktop builds passed these process-wide flags to the
+# portable backend. Clear them before importing HuggingFace so explicit model
+# downloads remain online; cached loads use local_files_only in each backend.
+os.environ.pop("HF_HUB_OFFLINE", None)
+os.environ.pop("TRANSFORMERS_OFFLINE", None)
 bundled_cc = PERFORMANCE_DEPENDENCIES / "triton" / "runtime" / "tcc" / "tcc.exe"
 if bundled_cc.is_file():
     os.environ.setdefault("CC", str(bundled_cc))

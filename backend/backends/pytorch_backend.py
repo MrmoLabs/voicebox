@@ -21,6 +21,7 @@ from .base import (
 )
 from ..utils.cache import get_cache_key, get_cached_voice_prompt, cache_voice_prompt
 from ..utils.audio import load_audio
+from ..utils.hf_offline_patch import force_offline_if_cached
 
 
 class PyTorchTTSBackend:
@@ -105,20 +106,27 @@ class PyTorchTTSBackend:
             from huggingface_hub import constants as hf_constants
             tts_cache_dir = hf_constants.HF_HUB_CACHE
 
-            if self.device == "cpu":
-                self.model = Qwen3TTSModel.from_pretrained(
-                    model_path,
-                    cache_dir=tts_cache_dir,
-                    torch_dtype=torch.float32,
-                    low_cpu_mem_usage=False,
-                )
-            else:
-                self.model = Qwen3TTSModel.from_pretrained(
-                    model_path,
-                    cache_dir=tts_cache_dir,
-                    device_map=self.device,
-                    torch_dtype=torch.bfloat16,
-                )
+            # Qwen performs several nested Hub loads (processor, speech tokenizer,
+            # generation config) which do not consistently inherit the outer
+            # local_files_only argument. Scope offline mode to a complete cached
+            # model load so those nested calls cannot issue HEAD requests.
+            with force_offline_if_cached(is_cached, model_name):
+                if self.device == "cpu":
+                    self.model = Qwen3TTSModel.from_pretrained(
+                        model_path,
+                        cache_dir=tts_cache_dir,
+                        local_files_only=is_cached,
+                        torch_dtype=torch.float32,
+                        low_cpu_mem_usage=False,
+                    )
+                else:
+                    self.model = Qwen3TTSModel.from_pretrained(
+                        model_path,
+                        cache_dir=tts_cache_dir,
+                        local_files_only=is_cached,
+                        device_map=self.device,
+                        torch_dtype=torch.bfloat16,
+                    )
 
         self._current_model_size = model_size
         self.model_size = model_size

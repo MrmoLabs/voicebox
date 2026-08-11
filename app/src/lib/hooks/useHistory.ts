@@ -96,6 +96,20 @@ export function useExportGenerationAudio() {
   });
 }
 
+export function useExportGenerationsAudio() {
+  const platform = usePlatform();
+
+  return useMutation({
+    mutationFn: async (generationIds: string[]) => {
+      const blob = await apiClient.exportGenerationsAudio(generationIds);
+      await platform.filesystem.saveFile(`voicebox-audio-${generationIds.length}-items.zip`, blob, [
+        { name: 'ZIP Archive', extensions: ['zip'] },
+      ]);
+      return blob;
+    },
+  });
+}
+
 export function useImportGeneration() {
   const queryClient = useQueryClient();
 

@@ -7,6 +7,47 @@
 
 ## [Unreleased]
 
+This update focuses on making the Windows CUDA experience reliable beyond a
+single development machine. Voicebox now supports a portable Python CUDA
+backend with persistent compile caches, scoped offline loading for complete
+Qwen model snapshots, and a checksummed distribution format that can install
+the full CUDA runtime on a clean Windows x64 system.
+
+### Windows CUDA distribution
+
+- Added a complete Windows x64 CUDA distribution builder that packages the
+  desktop MSI, CUDA server core, CUDA libraries, portable Python backend, a
+  machine-readable manifest, and SHA-256 checksums.
+- Added a transactional PowerShell installer that validates every payload,
+  checks temporary disk-space requirements, stages and verifies the CUDA
+  backend before activation, and restores the previous backend if installation
+  fails.
+- Portable CUDA builds now use repository build outputs by default instead of
+  depending on one developer's AppData directory, while still accepting
+  explicit Python and CUDA source paths for reproducible build environments.
+
+### Generation workflow
+
+- Added multi-select history actions for favoriting, unfavoriting, exporting
+  selected audio as a ZIP archive, and deleting multiple generations.
+- Qwen Base and CustomVoice loads now route all nested processor, speech
+  tokenizer, and generation-config reads through the selected model cache.
+  Complete cached models load without Hugging Face metadata retries, while
+  missing models can still be downloaded explicitly.
+- The portable CUDA backend keeps TorchInductor and Triton compile artifacts in
+  persistent application cache directories so compatible generations can reuse
+  compilation work after restarting Voicebox.
+
+### Windows reliability
+
+- Closing Voicebox, including from a server-startup error window, now terminates
+  the managed backend process instead of leaving Voicebox or Python workers in
+  the background.
+- Server data-directory creation now accepts an existing directory and reports
+  genuine filesystem failures without the misleading Windows error 183 loop.
+- Capture refinement carries the selected capture language through the full
+  refinement pipeline instead of silently falling back to English.
+
 ### Linux
 
 - **ROCm setup works on Linux AMD systems.** Docker ROCm builds now keep PyTorch

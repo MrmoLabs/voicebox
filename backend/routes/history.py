@@ -1,6 +1,7 @@
 """Generation history endpoints."""
 
 import io
+import zipfile
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
@@ -67,6 +68,76 @@ async def clear_failed_generations(db: Session = Depends(get_db)):
     """Delete every generation with status='failed'. Used by the UI's 'Clear failed' button (#410)."""
     count = await history.delete_failed_generations(db)
     return {"deleted": count}
+
+
+@router.post("/history/batch/favorite")
+async def set_batch_favorite(
+    request: models.GenerationBatchFavoriteRequest,
+    db: Session = Depends(get_db),
+):
+    """Set a consistent favorite state for multiple generations."""
+    updated = (
+        db.query(DBGeneration)
+        .filter(DBGeneration.id.in_(request.generation_ids))
+        .update({DBGeneration.is_favorited: request.is_favorited}, synchronize_session=False)
+    )
+    db.commit()
+    return {"updated": updated}
+
+
+@router.post("/history/batch/delete")
+async def delete_batch_generations(
+    request: models.GenerationBatchRequest,
+    db: Session = Depends(get_db),
+):
+    """Delete multiple generations and their stored audio."""
+    deleted = 0
+    for generation_id in request.generation_ids:
+        if await history.delete_generation(generation_id, db):
+            deleted += 1
+    return {"deleted": deleted}
+
+
+@router.post("/history/batch/export-audio")
+async def export_batch_audio(
+    request: models.GenerationBatchRequest,
+    db: Session = Depends(get_db),
+):
+    """Export the available audio for selected generations as one ZIP."""
+    generations = (
+        db.query(DBGeneration)
+        .filter(DBGeneration.id.in_(request.generation_ids))
+        .all()
+    )
+    by_id = {generation.id: generation for generation in generations}
+    archive = io.BytesIO()
+    exported = 0
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
+        for generation_id in request.generation_ids:
+            generation = by_id.get(generation_id)
+            if generation is None or not generation.audio_path:
+                continue
+            audio_path = config.resolve_storage_path(generation.audio_path)
+            if audio_path is None or not audio_path.is_file():
+                continue
+            safe_text = "".join(
+                c for c in generation.text[:30] if c.isalnum() or c in (" ", "-", "_")
+            ).strip() or "generation"
+            bundle.write(audio_path, f"{safe_text}-{generation.id[:8]}.wav")
+            exported += 1
+
+    if exported == 0:
+        raise HTTPException(status_code=400, detail="None of the selected generations has audio")
+    archive.seek(0)
+    return StreamingResponse(
+        archive,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": safe_content_disposition(
+                "attachment", f"voicebox-audio-{exported}-items.zip"
+            )
+        },
+    )
 
 
 @router.get("/history/{generation_id}", response_model=models.HistoryResponse)

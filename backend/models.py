@@ -489,6 +489,18 @@ class ModelDownloadRequest(BaseModel):
     model_name: str
 
 
+class GenerationBatchRequest(BaseModel):
+    """Generation IDs targeted by a batch history operation."""
+
+    generation_ids: List[str] = Field(..., min_length=1, max_length=500)
+
+
+class GenerationBatchFavoriteRequest(GenerationBatchRequest):
+    """Set the favorite state for multiple generations."""
+
+    is_favorited: bool
+
+
 class ModelMigrateRequest(BaseModel):
     """Request model for migrating models to a new directory."""
 

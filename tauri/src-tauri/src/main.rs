@@ -657,8 +657,6 @@ async fn start_server(
                 if portable_available {
                     let compile_cache = data_dir.join("cache").join("torch-compile");
                     cmd = cmd.env("VOICEBOX_TTS_OPTIMIZE", "codebook");
-                    cmd = cmd.env("HF_HUB_OFFLINE", "1");
-                    cmd = cmd.env("TRANSFORMERS_OFFLINE", "1");
                     cmd = cmd.env(
                         "TORCHINDUCTOR_CACHE_DIR",
                         compile_cache.join("inductor").to_string_lossy().as_ref(),
@@ -1645,6 +1643,7 @@ pub fn run() {
 
                 // Set up listener for frontend response
                 let window_for_close = window.clone();
+                let app_for_exit = app_handle.clone();
                 let closing_for_timeout = closing.clone();
                 let (tx, mut rx) = mpsc::unbounded_channel::<()>();
 
@@ -1655,11 +1654,11 @@ pub fn run() {
                 tauri::async_runtime::spawn(async move {
                     tokio::select! {
                         _ = rx.recv() => {
-                            window_for_close.close().ok();
+                            app_for_exit.exit(0);
                         }
                         _ = tokio::time::sleep(tokio::time::Duration::from_secs(5)) => {
-                            eprintln!("Window close timeout, closing anyway");
-                            window_for_close.close().ok();
+                            eprintln!("Window close timeout, exiting application anyway");
+                            app_for_exit.exit(0);
                         }
                     }
                     window_for_close.unlisten(listener_id);

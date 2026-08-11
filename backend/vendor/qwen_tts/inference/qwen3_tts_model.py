@@ -116,7 +116,19 @@ class Qwen3TTSModel:
                 f"AutoModel returned {type(model)}, expected Qwen3TTSForConditionalGeneration. "
             )
 
-        processor = AutoProcessor.from_pretrained(pretrained_model_name_or_path, fix_mistral_regex=True,)
+        # Keep processor resolution consistent with the model resolution. In
+        # particular, cached Voicebox models must not issue metadata requests,
+        # while an explicit download of a missing model must remain online.
+        processor_kwargs = {
+            key: kwargs[key]
+            for key in ("cache_dir", "revision", "token", "local_files_only", "trust_remote_code")
+            if key in kwargs
+        }
+        processor = AutoProcessor.from_pretrained(
+            pretrained_model_name_or_path,
+            fix_mistral_regex=True,
+            **processor_kwargs,
+        )
 
         generate_defaults = model.generate_config
         instance = cls(model=model, processor=processor, generate_defaults=generate_defaults)

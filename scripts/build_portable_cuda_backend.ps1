@@ -1,18 +1,26 @@
 param(
     [string]$OutputDirectory = "backend\dist\voicebox-server-cuda\python-backend",
-    [string]$CudaInternal = "$env:APPDATA\sh.voicebox.app\backends\cuda\_internal",
-    [string]$PythonRoot = "C:\Program Files\Python312"
+    [string]$CudaInternal = "",
+    [string]$PythonRoot = ""
 )
 
 $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent $PSScriptRoot
+$defaultCudaInternal = Join-Path $projectRoot "backend\dist\voicebox-server-cuda\_internal"
+if ([string]::IsNullOrWhiteSpace($CudaInternal)) {
+    $CudaInternal = $defaultCudaInternal
+}
+if ([string]::IsNullOrWhiteSpace($PythonRoot)) {
+    $pythonCommand = Get-Command python.exe -ErrorAction Stop
+    $PythonRoot = Split-Path -Parent $pythonCommand.Source
+}
 $output = [System.IO.Path]::GetFullPath((Join-Path $projectRoot $OutputDirectory))
 $distRoot = [System.IO.Path]::GetFullPath((Join-Path $projectRoot "backend\dist"))
 if (-not $output.StartsWith($distRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
     throw "Output directory must be under backend\dist"
 }
 if (-not (Test-Path -LiteralPath $CudaInternal -PathType Container)) {
-    throw "CUDA internal directory not found: $CudaInternal"
+    throw "CUDA internal directory not found: $CudaInternal. Build the CUDA onedir backend first or pass -CudaInternal."
 }
 if (-not (Test-Path -LiteralPath (Join-Path $PythonRoot "python.exe") -PathType Leaf)) {
     throw "Python 3.12 runtime not found: $PythonRoot"
@@ -60,7 +68,7 @@ Copy-Item -LiteralPath (Join-Path $projectRoot "backend\portable_cuda_launcher.p
 
 $internalLink = Join-Path $output "..\_internal"
 if (-not (Test-Path -LiteralPath $internalLink)) {
-    Write-Warning "The portable backend expects the existing CUDA _internal directory beside its output directory."
+    throw "The portable backend requires the CUDA _internal directory beside it: $internalLink"
 }
 
 $size = (Get-ChildItem $output -Recurse -File | Measure-Object Length -Sum).Sum

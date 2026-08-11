@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
   AudioLines,
+  CheckSquare,
   Download,
   FileArchive,
   Loader2,
@@ -12,6 +13,7 @@ import {
   Star,
   Trash2,
   Wand2,
+  X,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -19,6 +21,7 @@ import { useTranslation } from 'react-i18next';
 import { AudioBars } from '@/components/AudioBars';
 import { EffectsChainEditor } from '@/components/Effects/EffectsChainEditor';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
   Dialog,
   DialogContent,
@@ -50,6 +53,7 @@ import {
   useDeleteGeneration,
   useExportGeneration,
   useExportGenerationAudio,
+  useExportGenerationsAudio,
   useHistory,
   useImportGeneration,
 } from '@/lib/hooks/useHistory';
@@ -70,6 +74,10 @@ export function HistoryTable() {
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedGenerationIds, setSelectedGenerationIds] = useState<Set<string>>(new Set());
+  const [batchDeleteDialogOpen, setBatchDeleteDialogOpen] = useState(false);
+  const [batchActionPending, setBatchActionPending] = useState(false);
   const [generationToDelete, setGenerationToDelete] = useState<{ id: string; name: string } | null>(
     null,
   );
@@ -100,6 +108,7 @@ export function HistoryTable() {
   const [clearFailedDialogOpen, setClearFailedDialogOpen] = useState(false);
   const exportGeneration = useExportGeneration();
   const exportGenerationAudio = useExportGenerationAudio();
+  const exportGenerationsAudio = useExportGenerationsAudio();
   const importGeneration = useImportGeneration();
   const cancelGeneration = useMutation({
     mutationFn: (generationId: string) => apiClient.cancelGeneration(generationId),
@@ -143,6 +152,14 @@ export function HistoryTable() {
       }
     }
   }, [historyData, page]);
+
+  useEffect(() => {
+    const availableIds = new Set(allHistory.map((item) => item.id));
+    setSelectedGenerationIds((previous) => {
+      const next = new Set([...previous].filter((id) => availableIds.has(id)));
+      return next.size === previous.size ? previous : next;
+    });
+  }, [allHistory]);
 
   // Reset to page 0 when deletions, imports, or generation completions occur
   const pendingCount = useGenerationStore((state) => state.pendingGenerationIds.size);
@@ -298,6 +315,76 @@ export function HistoryTable() {
     }
   };
 
+  const toggleGenerationSelection = (generationId: string) => {
+    setSelectedGenerationIds((previous) => {
+      const next = new Set(previous);
+      if (next.has(generationId)) next.delete(generationId);
+      else next.add(generationId);
+      return next;
+    });
+  };
+
+  const exitSelectionMode = () => {
+    setSelectionMode(false);
+    setSelectedGenerationIds(new Set());
+  };
+
+  const handleBatchFavorite = async (isFavorited: boolean) => {
+    const ids = [...selectedGenerationIds];
+    if (ids.length === 0) return;
+    setBatchActionPending(true);
+    try {
+      const result = await apiClient.setGenerationsFavorite(ids, isFavorited);
+      await queryClient.invalidateQueries({ queryKey: ['history'] });
+      toast({
+        title: isFavorited ? 'Added to favorites' : 'Removed from favorites',
+        description: `${result.updated} generations updated.`,
+      });
+    } catch (error) {
+      toast({
+        title: 'Batch update failed',
+        description: error instanceof Error ? error.message : 'Unknown error',
+        variant: 'destructive',
+      });
+    } finally {
+      setBatchActionPending(false);
+    }
+  };
+
+  const handleBatchExport = () => {
+    const ids = [...selectedGenerationIds];
+    if (ids.length === 0) return;
+    exportGenerationsAudio.mutate(ids, {
+      onSuccess: () =>
+        toast({ title: 'Audio exported', description: `${ids.length} selected items processed.` }),
+      onError: (error) =>
+        toast({ title: 'Batch export failed', description: error.message, variant: 'destructive' }),
+    });
+  };
+
+  const handleBatchDeleteConfirm = async () => {
+    const ids = [...selectedGenerationIds];
+    if (ids.length === 0) return;
+    setBatchActionPending(true);
+    try {
+      const result = await apiClient.deleteGenerations(ids);
+      setBatchDeleteDialogOpen(false);
+      exitSelectionMode();
+      setPage(0);
+      setAllHistory([]);
+      await queryClient.invalidateQueries({ queryKey: ['history'] });
+      toast({ title: 'Generations deleted', description: `${result.deleted} items removed.` });
+    } catch (error) {
+      toast({
+        title: 'Batch delete failed',
+        description: error instanceof Error ? error.message : 'Unknown error',
+        variant: 'destructive',
+      });
+    } finally {
+      setBatchActionPending(false);
+    }
+  };
+
   const handleApplyEffects = (generationId: string) => {
     const gen = allHistory.find((g) => g.id === generationId);
     const versions = gen?.versions ?? [];
@@ -407,6 +494,12 @@ export function HistoryTable() {
   const history = allHistory;
   const hasMore = allHistory.length < total;
   const failedCount = history.filter((g) => g.status === 'failed').length;
+  const selectableHistory = history.filter(
+    (g) => g.status !== 'loading_model' && g.status !== 'generating',
+  );
+  const allLoadedSelected =
+    selectableHistory.length > 0 &&
+    selectableHistory.every((generation) => selectedGenerationIds.has(generation.id));
 
   const handleClearFailedConfirm = () => {
     clearFailed.mutate(undefined, {
@@ -436,6 +529,91 @@ export function HistoryTable() {
         </div>
       ) : (
         <>
+          <div className="flex items-center justify-between gap-2 px-1 pb-2">
+            {selectionMode ? (
+              <>
+                <div className="flex items-center gap-2 min-w-0">
+                  <Checkbox
+                    checked={allLoadedSelected}
+                    onCheckedChange={(checked) =>
+                      setSelectedGenerationIds(
+                        checked
+                          ? new Set(selectableHistory.map((generation) => generation.id))
+                          : new Set(),
+                      )
+                    }
+                    disabled={selectableHistory.length === 0 || batchActionPending}
+                  />
+                  <span className="text-xs text-muted-foreground whitespace-nowrap">
+                    {selectedGenerationIds.size} selected
+                  </span>
+                </div>
+                <div className="flex items-center gap-1 flex-wrap justify-end">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 text-xs"
+                    disabled={selectedGenerationIds.size === 0 || batchActionPending}
+                    onClick={() => handleBatchFavorite(true)}
+                  >
+                    <Star className="h-3 w-3 mr-1" /> Favorite
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 text-xs"
+                    disabled={selectedGenerationIds.size === 0 || batchActionPending}
+                    onClick={() => handleBatchFavorite(false)}
+                  >
+                    Unfavorite
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 text-xs"
+                    disabled={selectedGenerationIds.size === 0 || exportGenerationsAudio.isPending}
+                    onClick={handleBatchExport}
+                  >
+                    {exportGenerationsAudio.isPending ? (
+                      <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                    ) : (
+                      <Download className="h-3 w-3 mr-1" />
+                    )}
+                    Export ZIP
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 text-xs text-destructive"
+                    disabled={selectedGenerationIds.size === 0 || batchActionPending}
+                    onClick={() => setBatchDeleteDialogOpen(true)}
+                  >
+                    <Trash2 className="h-3 w-3 mr-1" /> Delete
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7"
+                    onClick={exitSelectionMode}
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              </>
+            ) : (
+              <>
+                <span className="text-xs text-muted-foreground">{total} generations</span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 text-xs text-muted-foreground"
+                  onClick={() => setSelectionMode(true)}
+                >
+                  <CheckSquare className="h-3 w-3 mr-1.5" /> Select
+                </Button>
+              </>
+            )}
+          </div>
           {failedCount > 0 && (
             <div className="flex items-center justify-between px-1 pb-2">
               <span className="text-xs text-muted-foreground">
@@ -479,6 +657,7 @@ export function HistoryTable() {
                   className={cn(
                     'border rounded-md bg-card transition-colors text-left w-full',
                     isCurrentlyPlaying && 'bg-muted/70',
+                    selectedGenerationIds.has(gen.id) && 'border-accent bg-accent/5',
                   )}
                 >
                   {/* Main row */}
@@ -502,7 +681,11 @@ export function HistoryTable() {
                     onMouseDown={(e) => {
                       if (!isPlayable) return;
                       const target = e.target as HTMLElement;
-                      if (target.closest('textarea') || window.getSelection()?.toString()) {
+                      if (
+                        target.closest('textarea') ||
+                        target.closest('button') ||
+                        window.getSelection()?.toString()
+                      ) {
                         return;
                       }
                       handlePlay(gen.id, gen.text, gen.profile_id);
@@ -517,6 +700,16 @@ export function HistoryTable() {
                       }
                     }}
                   >
+                    {selectionMode && (
+                      <div className="flex items-center shrink-0">
+                        <Checkbox
+                          checked={selectedGenerationIds.has(gen.id)}
+                          onCheckedChange={() => toggleGenerationSelection(gen.id)}
+                          disabled={isGenerating || batchActionPending}
+                          aria-label={`Select generation from ${gen.profile_name}`}
+                        />
+                      </div>
+                    )}
                     {/* Status icon */}
                     <div className="flex items-center shrink-0 w-10 justify-center overflow-hidden">
                       <AudioBars
@@ -821,6 +1014,30 @@ export function HistoryTable() {
               {clearFailed.isPending
                 ? t('history.clearFailedDialog.clearing')
                 : t('history.clearFailedDialog.clearAll')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={batchDeleteDialogOpen} onOpenChange={setBatchDeleteDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete selected generations?</DialogTitle>
+            <DialogDescription>
+              This will permanently remove {selectedGenerationIds.size} selected generations and
+              their audio files. This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setBatchDeleteDialogOpen(false)}>
+              {t('common.cancel')}
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleBatchDeleteConfirm}
+              disabled={batchActionPending}
+            >
+              {batchActionPending ? 'Deleting...' : `Delete ${selectedGenerationIds.size}`}
             </Button>
           </DialogFooter>
         </DialogContent>

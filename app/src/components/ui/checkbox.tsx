@@ -8,6 +8,7 @@ export interface CheckboxProps {
   disabled?: boolean;
   className?: string;
   id?: string;
+  'aria-label'?: string;
 }
 
 const Checkbox = React.forwardRef<HTMLButtonElement, CheckboxProps>(
