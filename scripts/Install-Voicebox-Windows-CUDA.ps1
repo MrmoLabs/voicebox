@@ -1,5 +1,6 @@
 param(
-    [switch]$KeepStaging
+    [switch]$KeepStaging,
+    [switch]$ValidateOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -44,7 +45,28 @@ $stagingDir = Join-Path $backendsDir (".cuda-install-" + $stamp)
 $backupDir = Join-Path $backendsDir ("cuda.backup-" + $stamp)
 
 $requiredBytes = [int64]$manifest.required_free_bytes
-$driveRoot = [System.IO.Path]::GetPathRoot($dataDir)
+$storagePath = $dataDir
+$probe = $dataDir
+while (-not (Test-Path -LiteralPath $probe)) {
+    $parent = Split-Path -Parent $probe
+    if ([string]::IsNullOrWhiteSpace($parent) -or $parent -eq $probe) { break }
+    $probe = $parent
+}
+while (Test-Path -LiteralPath $probe) {
+    $item = Get-Item -LiteralPath $probe -Force
+    if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -and $item.Target) {
+        $target = @($item.Target)[0]
+        if ([System.IO.Path]::IsPathRooted($target)) {
+            $relative = $dataDir.Substring($probe.Length).TrimStart('\')
+            $storagePath = if ($relative) { Join-Path $target $relative } else { $target }
+            break
+        }
+    }
+    $parent = Split-Path -Parent $probe
+    if ([string]::IsNullOrWhiteSpace($parent) -or $parent -eq $probe) { break }
+    $probe = $parent
+}
+$driveRoot = [System.IO.Path]::GetPathRoot($storagePath)
 $drive = Get-PSDrive -Name $driveRoot.Substring(0, 1)
 if ($drive.Free -lt $requiredBytes) {
     throw ("Not enough free space on {0}. Required temporarily: {1:N1} GB; available: {2:N1} GB." -f $driveRoot, ($requiredBytes / 1GB), ($drive.Free / 1GB))
@@ -73,6 +95,11 @@ try {
     $backendVersion = (& $cudaExe --version 2>&1 | Out-String).Trim()
     if ($LASTEXITCODE -ne 0 -or $backendVersion -notmatch [regex]::Escape($manifest.version)) {
         throw "CUDA backend version does not match package version $($manifest.version): $backendVersion"
+    }
+
+    if ($ValidateOnly) {
+        Write-Host "Voicebox $($manifest.version) package validation succeeded. No installation changes were made."
+        return
     }
 
     Get-Process -Name "voicebox", "voicebox-server", "voicebox-server-cuda", "python" -ErrorAction SilentlyContinue |

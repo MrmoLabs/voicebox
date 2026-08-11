@@ -2,7 +2,8 @@ param(
     [string]$Version = "",
     [string]$MsiPath = "",
     [string]$OutputDirectory = "",
-    [string]$PythonRoot = ""
+    [string]$PythonRoot = "",
+    [string]$CudaInternal = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -25,8 +26,30 @@ if (-not (Test-Path -LiteralPath $cudaExe -PathType Leaf)) {
     throw "CUDA onedir backend not found. Build it first: $cudaExe"
 }
 
+$internalDir = Join-Path $cudaDir "_internal"
+if (-not [string]::IsNullOrWhiteSpace($CudaInternal)) {
+    $sourceInternal = [System.IO.Path]::GetFullPath($CudaInternal)
+    if (-not (Test-Path -LiteralPath $sourceInternal -PathType Container)) {
+        throw "CUDA _internal source not found: $sourceInternal"
+    }
+    if ((Resolve-Path -LiteralPath $sourceInternal).Path -ne (Resolve-Path -LiteralPath $internalDir).Path) {
+        if (Test-Path -LiteralPath $internalDir) { Remove-Item -LiteralPath $internalDir -Recurse -Force }
+        New-Item -ItemType Directory -Path $internalDir | Out-Null
+        & robocopy $sourceInternal $internalDir /E /NFL /NDL /NJH /NJS /NP /R:2 /W:1
+        if ($LASTEXITCODE -ge 8) { throw "Failed to copy CUDA runtime with robocopy exit code $LASTEXITCODE." }
+    }
+}
+
+$nvidiaDlls = @(Get-ChildItem -LiteralPath $internalDir -Recurse -File | Where-Object {
+    $_.Name -match '^(cublas|cudart|cudnn|cufft|curand|cusolver|cusparse|nvjitlink|nvrtc).+\.dll$'
+})
+$nvidiaBytes = ($nvidiaDlls | Measure-Object Length -Sum).Sum
+if ($nvidiaDlls.Count -lt 10 -or $nvidiaBytes -lt 1GB) {
+    throw ("CUDA runtime validation failed: found {0} NVIDIA DLLs totaling {1:N1} MB. The build environment likely contains CPU-only Torch." -f $nvidiaDlls.Count, ($nvidiaBytes / 1MB))
+}
+
 & (Join-Path $PSScriptRoot "build_portable_cuda_backend.ps1") -PythonRoot $PythonRoot
-if ($LASTEXITCODE -ne 0) { throw "Portable CUDA backend build failed." }
+if (-not $?) { throw "Portable CUDA backend build failed." }
 
 $backendVersion = (& $cudaExe --version 2>&1 | Out-String).Trim()
 if ($LASTEXITCODE -ne 0 -or $backendVersion -notmatch [regex]::Escape($Version)) {
@@ -71,6 +94,9 @@ $files = foreach ($name in $payloadNames) {
         sha256 = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
     }
 }
+$payloadBytes = [int64]0
+foreach ($file in $files) { $payloadBytes += [int64]$file["size"] }
+$installedBytes = (Get-ChildItem -LiteralPath $cudaDir -Recurse -File | Measure-Object Length -Sum).Sum
 $manifest = [ordered]@{
     schema = 1
     product = "Voicebox"
@@ -80,7 +106,7 @@ $manifest = [ordered]@{
     msi = $msiName
     cuda_core = $coreName
     cuda_libraries = $libsName
-    required_free_bytes = [int64](($files | Measure-Object -Property size -Sum).Sum + (Get-ChildItem -LiteralPath $cudaDir -Recurse -File | Measure-Object Length -Sum).Sum + 2GB)
+    required_free_bytes = [int64]($payloadBytes + $installedBytes + 2GB)
     files = @($files)
 }
 $json = $manifest | ConvertTo-Json -Depth 5

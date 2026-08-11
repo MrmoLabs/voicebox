@@ -34,6 +34,13 @@ Windows user:
 powershell -ExecutionPolicy Bypass -File .\Install-Voicebox-Windows-CUDA.ps1
 ```
 
+To verify every checksum, extract both CUDA archives, and validate the backend
+version without changing the installed application, run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Install-Voicebox-Windows-CUDA.ps1 -ValidateOnly
+```
+
 The installer verifies file sizes and SHA-256 hashes before changing the
 installation. It stages the full CUDA backend under Voicebox AppData, validates
 the runtime and version, stops managed Voicebox processes, swaps the backend,
