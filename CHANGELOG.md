@@ -7,6 +7,8 @@
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-08-11
+
 This update focuses on making the Windows CUDA experience reliable beyond a
 single development machine. Voicebox now supports a portable Python CUDA
 backend with persistent compile caches, scoped offline loading for complete
@@ -792,6 +794,8 @@ The first public release of Voicebox — an open-source voice synthesis studio p
 
 Tauri v2, React, TypeScript, Tailwind CSS, FastAPI, Qwen3-TTS, Whisper, SQLite
 
+[Unreleased]: https://github.com/jamiepine/voicebox/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/jamiepine/voicebox/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/jamiepine/voicebox/compare/v0.4.5...v0.5.0
 [0.4.5]: https://github.com/jamiepine/voicebox/compare/v0.4.4...v0.4.5
 [0.4.4]: https://github.com/jamiepine/voicebox/compare/v0.4.3...v0.4.4
