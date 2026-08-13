@@ -82,6 +82,7 @@ export interface GenerationRequest {
   instruct?: string;
   /** When true and the profile has a personality prompt, input text is rewritten in-character before TTS. */
   personality?: boolean;
+  source?: 'manual' | 'audiobook';
   max_chunk_chars?: number;
   crossfade_ms?: number;
   normalize?: boolean;
@@ -424,6 +425,62 @@ export interface StoryItemDetail {
 
 export interface StoryItemVolumeUpdate {
   volume: number;
+}
+
+export interface AudiobookCreate {
+  title: string;
+  author?: string;
+  description?: string;
+}
+
+export interface AudiobookResponse extends AudiobookCreate {
+  id: string;
+  chapter_count: number;
+  sentence_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AudiobookSentence {
+  id: string;
+  chapter_id: string;
+  generation_id?: string;
+  text: string;
+  paragraph_index: number;
+  position: number;
+  generation_status?: 'loading_model' | 'generating' | 'completed' | 'failed';
+  generation_error?: string;
+  duration?: number;
+  profile_id?: string;
+  profile_name?: string;
+  engine?: string;
+  model_size?: string;
+}
+
+export interface AudiobookChapter {
+  id: string;
+  audiobook_id: string;
+  title: string;
+  source_text: string;
+  position: number;
+  sentences: AudiobookSentence[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AudiobookDetail extends AudiobookResponse {
+  chapters: AudiobookChapter[];
+}
+
+export interface AudiobookSplitResponse {
+  sentences: Array<{ text: string; paragraph_index: number; position: number }>;
+  paragraph_count: number;
+}
+
+export interface AudiobookCancelResponse {
+  matched: number;
+  cancelled: number;
+  already_finished: number;
 }
 
 export interface StoryItemVersionUpdate {

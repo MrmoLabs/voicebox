@@ -90,6 +90,11 @@ class GenerationRequest(BaseModel):
         default=False,
         description="When true and the profile has a personality prompt, the input text is rewritten in-character before TTS.",
     )
+    source: Optional[str] = Field(
+        default=None,
+        pattern="^(manual|audiobook)$",
+        description="Origin of the request. Audiobook jobs never trigger global autoplay.",
+    )
     max_chunk_chars: int = Field(
         default=800, ge=100, le=5000, description="Max characters per chunk for long text splitting"
     )
@@ -704,6 +709,97 @@ class StoryItemVolumeUpdate(BaseModel):
     """
 
     volume: float = Field(..., ge=0.0, le=2.0)
+
+
+class AudiobookCreate(BaseModel):
+    title: str = Field(..., min_length=1, max_length=200)
+    author: Optional[str] = Field(None, max_length=200)
+    description: Optional[str] = Field(None, max_length=1000)
+
+
+class AudiobookResponse(BaseModel):
+    id: str
+    title: str
+    author: Optional[str] = None
+    description: Optional[str] = None
+    chapter_count: int = 0
+    sentence_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class AudiobookChapterCreate(BaseModel):
+    title: str = Field(..., min_length=1, max_length=200)
+    source_text: str = Field(default="", max_length=500000)
+
+
+class AudiobookSentenceResponse(BaseModel):
+    id: str
+    chapter_id: str
+    generation_id: Optional[str] = None
+    text: str
+    paragraph_index: int
+    position: int
+    generation_status: Optional[str] = None
+    generation_error: Optional[str] = None
+    duration: Optional[float] = None
+    profile_id: Optional[str] = None
+    profile_name: Optional[str] = None
+    engine: Optional[str] = None
+    model_size: Optional[str] = None
+
+
+class AudiobookChapterResponse(BaseModel):
+    id: str
+    audiobook_id: str
+    title: str
+    source_text: str
+    position: int
+    sentences: List[AudiobookSentenceResponse] = []
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class AudiobookDetailResponse(AudiobookResponse):
+    chapters: List[AudiobookChapterResponse] = []
+
+
+class AudiobookSplitRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=500000)
+
+
+class AudiobookSplitSentence(BaseModel):
+    text: str
+    paragraph_index: int
+    position: int
+
+
+class AudiobookSplitResponse(BaseModel):
+    sentences: List[AudiobookSplitSentence]
+    paragraph_count: int
+
+
+class AudiobookSentenceUpdate(BaseModel):
+    text: Optional[str] = Field(None, min_length=1, max_length=5000)
+    generation_id: Optional[str] = None
+
+
+class AudiobookSentenceCreate(BaseModel):
+    text: str = Field(..., min_length=1, max_length=5000)
+    paragraph_index: Optional[int] = Field(None, ge=0)
+    position: Optional[int] = Field(None, ge=0)
+
+
+class AudiobookCancelResponse(BaseModel):
+    matched: int
+    cancelled: int
+    already_finished: int
 
 
 class EffectConfig(BaseModel):

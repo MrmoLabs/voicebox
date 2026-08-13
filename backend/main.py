@@ -34,6 +34,9 @@ if __name__ == "__main__":
 
     if args.data_dir:
         config.set_data_dir(args.data_dir)
+        from .logging_config import configure_persistent_logging
+
+        configure_persistent_logging(args.data_dir)
 
     database.init_db()
 

@@ -292,6 +292,24 @@ async def _run_startup(application: FastAPI) -> None:
     logger.info("Database: %s", _db_path)
     logger.info("Data directory: %s", config.get_data_dir())
 
+    # On Windows, WebView/SSE clients may close a socket before Proactor's
+    # shutdown callback runs. This is a normal disconnect, but asyncio logs it
+    # as an ERROR unless the loop handler recognizes WinError 10054.
+    loop = asyncio.get_running_loop()
+    previous_exception_handler = loop.get_exception_handler()
+
+    def handle_loop_exception(event_loop, context):
+        error = context.get("exception")
+        if isinstance(error, ConnectionResetError) and getattr(error, "winerror", None) == 10054:
+            logger.debug("Client connection reset during transport cleanup")
+            return
+        if previous_exception_handler:
+            previous_exception_handler(event_loop, context)
+        else:
+            event_loop.default_exception_handler(context)
+
+    loop.set_exception_handler(handle_loop_exception)
+
     init_queue()
 
     # Mark stale "generating" records as failed -- leftovers from a killed process

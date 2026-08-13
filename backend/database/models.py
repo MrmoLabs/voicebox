@@ -114,6 +114,48 @@ class StoryItem(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class Audiobook(Base):
+    """A long-form reading project containing ordered chapters."""
+
+    __tablename__ = "audiobooks"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    title = Column(String, nullable=False)
+    author = Column(String, nullable=True)
+    description = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class AudiobookChapter(Base):
+    """An ordered source-text chapter in an audiobook."""
+
+    __tablename__ = "audiobook_chapters"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    audiobook_id = Column(String, ForeignKey("audiobooks.id"), nullable=False)
+    title = Column(String, nullable=False)
+    source_text = Column(Text, nullable=False, default="")
+    position = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class AudiobookSentence(Base):
+    """One independently generated, playable sentence in a chapter."""
+
+    __tablename__ = "audiobook_sentences"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    chapter_id = Column(String, ForeignKey("audiobook_chapters.id"), nullable=False)
+    generation_id = Column(String, ForeignKey("generations.id"), nullable=True)
+    text = Column(Text, nullable=False)
+    paragraph_index = Column(Integer, nullable=False, default=0)
+    position = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class Project(Base):
     """Audio studio project (JSON blob)."""
 

@@ -140,7 +140,10 @@ async def delete_profile(
     db: Session = Depends(get_db),
 ):
     """Delete a voice profile."""
-    success = await profiles.delete_profile(profile_id, db)
+    try:
+        success = await profiles.delete_profile(profile_id, db)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if not success:
         raise HTTPException(status_code=404, detail="Profile not found")
     return {"message": "Profile deleted successfully"}

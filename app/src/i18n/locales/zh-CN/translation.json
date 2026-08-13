@@ -13,6 +13,7 @@
   },
   "nav": {
     "generate": "生成",
+    "audiobooks": "有声图书",
     "stories": "故事",
     "captures": "捕获",
     "voices": "声音",

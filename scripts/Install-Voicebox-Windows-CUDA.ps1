@@ -39,13 +39,23 @@ $coreArchive = Join-Path $packageDir $manifest.cuda_core
 $libsArchive = Join-Path $packageDir $manifest.cuda_libraries
 $dataDir = Join-Path $env:APPDATA "sh.voicebox.app"
 $backendsDir = Join-Path $dataDir "backends"
+# Resolve the backend junction itself before creating staging directories.
+# Windows tar cannot reliably chdir through nested junctions (the application
+# data root and its backends child may both be redirected).
+if (Test-Path -LiteralPath $backendsDir) {
+    $backendsItem = Get-Item -LiteralPath $backendsDir -Force
+    if ($backendsItem.Target) {
+        $backendTarget = @($backendsItem.Target)[0]
+        if ([System.IO.Path]::IsPathRooted($backendTarget)) { $backendsDir = $backendTarget }
+    }
+}
 $cudaDir = Join-Path $backendsDir "cuda"
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $stagingDir = Join-Path $backendsDir (".cuda-install-" + $stamp)
 $backupDir = Join-Path $backendsDir ("cuda.backup-" + $stamp)
 
 $requiredBytes = [int64]$manifest.required_free_bytes
-$storagePath = $dataDir
+$storagePath = $backendsDir
 $probe = $dataDir
 while (-not (Test-Path -LiteralPath $probe)) {
     $parent = Split-Path -Parent $probe
@@ -67,9 +77,10 @@ while (Test-Path -LiteralPath $probe) {
     $probe = $parent
 }
 $driveRoot = [System.IO.Path]::GetPathRoot($storagePath)
-$drive = Get-PSDrive -Name $driveRoot.Substring(0, 1)
-if ($drive.Free -lt $requiredBytes) {
-    throw ("Not enough free space on {0}. Required temporarily: {1:N1} GB; available: {2:N1} GB." -f $driveRoot, ($requiredBytes / 1GB), ($drive.Free / 1GB))
+$drive = New-Object System.IO.DriveInfo($driveRoot)
+$availableBytes = [int64]$drive.AvailableFreeSpace
+if ($availableBytes -lt $requiredBytes) {
+    throw ("Not enough free space on {0}. Required temporarily: {1:N1} GB; available: {2:N1} GB." -f $driveRoot, ($requiredBytes / 1GB), ($availableBytes / 1GB))
 }
 
 New-Item -ItemType Directory -Force -Path $backendsDir | Out-Null
@@ -81,6 +92,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Failed to extract the CUDA server archive." }
     & tar.exe -xzf $libsArchive -C $stagingDir
     if ($LASTEXITCODE -ne 0) { throw "Failed to extract the CUDA libraries archive." }
+    Copy-Item -LiteralPath (Join-Path $packageDir "cuda-libs.json") -Destination (Join-Path $stagingDir "cuda-libs.json")
 
     $cudaExe = Join-Path $stagingDir "voicebox-server-cuda.exe"
     $pythonExe = Join-Path $stagingDir "python-backend\runtime\python.exe"

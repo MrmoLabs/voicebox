@@ -20,6 +20,36 @@ use tauri::{command, State, Manager, WindowEvent, Emitter, Listener, RunEvent, W
 use tauri_plugin_shell::ShellExt;
 use tokio::sync::mpsc;
 
+const SERVER_LOG_MAX_ENTRIES: usize = 2000;
+
+fn server_log_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    app.path()
+        .app_data_dir()
+        .map(|path| path.join("logs"))
+        .map_err(|error| format!("Failed to get app data dir: {error}"))
+}
+
+#[command]
+fn get_server_logs(app: tauri::AppHandle) -> Result<Vec<serde_json::Value>, String> {
+    let log_dir = server_log_dir(&app)?;
+    let mut entries = Vec::new();
+    for name in ["server.log.2", "server.log.1", "server.log"] {
+        let path = log_dir.join(name);
+        let Ok(contents) = std::fs::read_to_string(path) else { continue };
+        for line in contents.lines() {
+            if let Ok(entry) = serde_json::from_str::<serde_json::Value>(line) {
+                if entry.get("line").and_then(|value| value.as_str()).is_some() {
+                    entries.push(entry);
+                }
+            }
+        }
+    }
+    if entries.len() > SERVER_LOG_MAX_ENTRIES {
+        entries.drain(..entries.len() - SERVER_LOG_MAX_ENTRIES);
+    }
+    Ok(entries)
+}
+
 pub const DICTATE_WINDOW_LABEL: &str = "dictate";
 const DICTATE_WINDOW_WIDTH: f64 = 420.0;
 const DICTATE_WINDOW_HEIGHT: f64 = 64.0;
@@ -656,7 +686,10 @@ async fn start_server(
                 if let Some(ref dir) = effective_models_dir { cmd = cmd.env("VOICEBOX_MODELS_DIR", dir); }
                 if portable_available {
                     let compile_cache = data_dir.join("cache").join("torch-compile");
-                    cmd = cmd.env("VOICEBOX_TTS_OPTIMIZE", "codebook");
+                    // Variable-length audiobook sentences can invalidate the
+                    // CUDA graphs used by torch.compile reduce-overhead mode.
+                    // Prefer stable eager inference for the packaged backend.
+                    cmd = cmd.env("VOICEBOX_TTS_OPTIMIZE", "0");
                     cmd = cmd.env(
                         "TORCHINDUCTOR_CACHE_DIR",
                         compile_cache.join("inductor").to_string_lossy().as_ref(),
@@ -1596,6 +1629,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             start_server,
+            get_server_logs,
             stop_server,
             restart_server,
             set_keep_server_running,

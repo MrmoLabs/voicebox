@@ -8,6 +8,9 @@ without changing any importers.
 from .models import (
     Base,
     AudioChannel,
+    Audiobook,
+    AudiobookChapter,
+    AudiobookSentence,
     Capture,
     CaptureSettings,
     ChannelDeviceMapping,
@@ -30,6 +33,9 @@ __all__ = [
     # Models
     "Base",
     "AudioChannel",
+    "Audiobook",
+    "AudiobookChapter",
+    "AudiobookSentence",
     "Capture",
     "CaptureSettings",
     "ChannelDeviceMapping",

@@ -123,12 +123,24 @@ function MainApp() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [platform.lifecycle]);
 
-  // Subscribe to server logs
+  // Load and follow the persistent server log. Polling works even when this
+  // app instance reused a backend process started by an earlier instance.
   useEffect(() => {
-    const unsubscribe = platform.lifecycle.subscribeToServerLogs((entry) => {
-      useLogStore.getState().addEntry(entry);
-    });
-    return unsubscribe;
+    let disposed = false;
+    const refreshLogs = async () => {
+      try {
+        const entries = await platform.lifecycle.getServerLogs();
+        if (!disposed) useLogStore.getState().replaceEntries(entries);
+      } catch (error) {
+        console.error('Failed to load server logs:', error);
+      }
+    };
+    void refreshLogs();
+    const interval = window.setInterval(() => void refreshLogs(), 1000);
+    return () => {
+      disposed = true;
+      window.clearInterval(interval);
+    };
   }, [platform.lifecycle]);
 
   // Setup window close handler and auto-start server when running in Tauri (production only)

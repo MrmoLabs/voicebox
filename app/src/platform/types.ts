@@ -53,6 +53,7 @@ export interface PlatformAudio {
 export interface ServerLogEntry {
   stream: 'stdout' | 'stderr';
   line: string;
+  timestamp?: number;
 }
 
 export interface PlatformLifecycle {
@@ -63,6 +64,7 @@ export interface PlatformLifecycle {
   setBackendOverride(backend?: string | null): Promise<void>;
   setupWindowCloseHandler(): Promise<void>;
   subscribeToServerLogs(callback: (entry: ServerLogEntry) => void): () => void;
+  getServerLogs(): Promise<ServerLogEntry[]>;
   onServerReady?: () => void;
 }
 

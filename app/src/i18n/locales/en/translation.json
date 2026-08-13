@@ -13,6 +13,7 @@
   },
   "nav": {
     "generate": "Generate",
+    "audiobooks": "Audiobooks",
     "stories": "Stories",
     "captures": "Captures",
     "voices": "Voices",

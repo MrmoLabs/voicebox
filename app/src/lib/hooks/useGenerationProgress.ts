@@ -16,7 +16,7 @@ interface GenerationStatusEvent {
 
 // Agent-initiated generations are played by the floating pill, not the
 // main-window AudioPlayer. Skip autoplay here to avoid double-playback.
-const AGENT_SOURCES = new Set(['mcp', 'rest']);
+const NON_AUTOPLAY_SOURCES = new Set(['mcp', 'rest', 'audiobook']);
 
 /**
  * Subscribes to SSE for all pending generations. When a generation completes,
@@ -118,8 +118,8 @@ export function useGenerationProgress() {
             // Auto-play if enabled and nothing is currently playing.
             // Skip agent-initiated sources — the floating pill window
             // plays those itself.
-            const isAgentSpeak = data.source ? AGENT_SOURCES.has(data.source) : false;
-            if (autoplayRef.current && !isPlayingRef.current && !isAgentSpeak) {
+            const suppressAutoplay = data.source ? NON_AUTOPLAY_SOURCES.has(data.source) : false;
+            if (autoplayRef.current && !isPlayingRef.current && !suppressAutoplay) {
               const genAudioUrl = apiClient.getAudioUrl(id);
               setAudioWithAutoPlay(genAudioUrl, id, '', '');
             }

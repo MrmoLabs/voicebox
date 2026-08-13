@@ -429,6 +429,17 @@ async def delete_profile(
     if not profile:
         return False
 
+    # An audiobook sentence keeps a durable reference to its generation and,
+    # transitively, to the voice used to create it. Deleting that profile would
+    # orphan the reading project and make retries impossible. Keep the voice
+    # intact until the user removes or replaces those sentence bindings.
+    from .audiobooks import profile_has_audiobook_references
+
+    if profile_has_audiobook_references(profile_id, db):
+        raise ValueError(
+            "This voice is used by an audiobook. Remove or replace its generated sentences before deleting the voice."
+        )
+
     db.query(DBProfileSample).filter_by(profile_id=profile_id).delete()
 
     db.delete(profile)

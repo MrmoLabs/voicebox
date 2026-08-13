@@ -120,6 +120,11 @@ class TauriLifecycle implements PlatformLifecycle {
       unlisten = null;
     };
   }
+
+  async getServerLogs(): Promise<ServerLogEntry[]> {
+    return invoke<ServerLogEntry[]>('get_server_logs');
+  }
+
 }
 
 export const tauriLifecycle = new TauriLifecycle();

@@ -77,7 +77,7 @@ async def generate_speech(
     model_size = (data.model_size or "1.7B") if engine_has_model_sizes(engine) else None
 
     text = data.text
-    source = "manual"
+    source = data.source or "manual"
     if data.personality and getattr(profile, "personality", None):
         try:
             llm_result = await personality.rewrite_as_profile(profile.personality, data.text)

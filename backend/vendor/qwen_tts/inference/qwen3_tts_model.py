@@ -132,7 +132,13 @@ class Qwen3TTSModel:
 
         generate_defaults = model.generate_config
         instance = cls(model=model, processor=processor, generate_defaults=generate_defaults)
-        optimization_mode = os.environ.get("VOICEBOX_TTS_OPTIMIZE", "codebook").lower()
+        # torch.compile's reduce-overhead mode uses CUDA graphs internally.
+        # Qwen's variable sentence shapes and tensor lifetimes can invalidate
+        # those recordings between audiobook sentences, causing hard failures
+        # such as "Offset increment outside graph capture". Stability is more
+        # important than the optional compile speedup, so keep eager execution
+        # as the default; advanced users may still opt in explicitly.
+        optimization_mode = os.environ.get("VOICEBOX_TTS_OPTIMIZE", "0").lower()
         if torch.cuda.is_available() and optimization_mode != "0":
             try:
                 if optimization_mode == "codebook":

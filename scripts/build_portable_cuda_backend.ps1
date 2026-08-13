@@ -60,7 +60,7 @@ Copy-Tree $performanceSite $performanceOutput $performanceExcludes @("*.pyc", "*
 
 $sourceOutput = Join-Path $output "app\backend"
 Copy-Tree (Join-Path $projectRoot "backend") $sourceOutput @(
-    "venv", "dist", "build", "tests", "__pycache__"
+    "venv", "dist", "build", "tests", "__pycache__", ".pytest_cache"
 ) @("*.pyc", "*.pyo")
 
 Copy-Tree (Join-Path $projectRoot "backend\vendor\qwen_tts") (Join-Path $output "qwen-source\qwen_tts") @("__pycache__") @("*.pyc", "*.pyo")

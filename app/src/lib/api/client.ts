@@ -2,6 +2,13 @@ import type { LanguageCode } from '@/lib/constants/languages';
 import { useServerStore } from '@/stores/serverStore';
 import type {
   ActiveTasksResponse,
+  AudiobookChapter,
+  AudiobookCancelResponse,
+  AudiobookCreate,
+  AudiobookDetail,
+  AudiobookResponse,
+  AudiobookSentence,
+  AudiobookSplitResponse,
   ApplyEffectsRequest,
   AvailableEffectsResponse,
   CaptureCreateResponse,
@@ -111,6 +118,51 @@ class ApiClient {
 
   async listProfiles(): Promise<VoiceProfileResponse[]> {
     return this.request<VoiceProfileResponse[]>('/profiles');
+  }
+
+  // Audiobooks
+  async listAudiobooks(): Promise<AudiobookResponse[]> {
+    return this.request<AudiobookResponse[]>('/audiobooks');
+  }
+
+  async createAudiobook(data: AudiobookCreate): Promise<AudiobookDetail> {
+    return this.request<AudiobookDetail>('/audiobooks', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async getAudiobook(id: string): Promise<AudiobookDetail> {
+    return this.request<AudiobookDetail>(`/audiobooks/${id}`);
+  }
+
+  async deleteAudiobook(id: string): Promise<void> {
+    await this.request(`/audiobooks/${id}`, { method: 'DELETE' });
+  }
+
+  async createAudiobookChapter(bookId: string, data: { title: string; source_text: string }): Promise<AudiobookChapter> {
+    return this.request<AudiobookChapter>(`/audiobooks/${bookId}/chapters`, { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async previewAudiobookSplit(text: string): Promise<AudiobookSplitResponse> {
+    return this.request<AudiobookSplitResponse>('/audiobooks/split', { method: 'POST', body: JSON.stringify({ text }) });
+  }
+
+  async splitAudiobookChapter(chapterId: string, text: string): Promise<AudiobookChapter> {
+    return this.request<AudiobookChapter>(`/audiobooks/chapters/${chapterId}/split`, { method: 'PUT', body: JSON.stringify({ text }) });
+  }
+
+  async updateAudiobookSentence(sentenceId: string, data: { text?: string; generation_id?: string | null }): Promise<AudiobookSentence> {
+    return this.request<AudiobookSentence>(`/audiobooks/sentences/${sentenceId}`, { method: 'PATCH', body: JSON.stringify(data) });
+  }
+
+  async createAudiobookSentence(chapterId: string, data: { text: string; position?: number; paragraph_index?: number }): Promise<AudiobookSentence> {
+    return this.request<AudiobookSentence>(`/audiobooks/chapters/${chapterId}/sentences`, { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  async deleteAudiobookSentence(sentenceId: string): Promise<void> {
+    await this.request(`/audiobooks/sentences/${sentenceId}`, { method: 'DELETE' });
+  }
+
+  async cancelAudiobookGeneration(bookId: string): Promise<AudiobookCancelResponse> {
+    return this.request<AudiobookCancelResponse>(`/audiobooks/${bookId}/cancel-generation`, { method: 'POST' });
   }
 
   async getProfile(profileId: string): Promise<VoiceProfileResponse> {

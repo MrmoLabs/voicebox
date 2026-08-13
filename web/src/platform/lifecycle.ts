@@ -36,6 +36,10 @@ class WebLifecycle implements PlatformLifecycle {
     // No-op for web - server logs are not available
     return () => {};
   }
+
+  async getServerLogs(): Promise<ServerLogEntry[]> {
+    return [];
+  }
 }
 
 export const webLifecycle = new WebLifecycle();
