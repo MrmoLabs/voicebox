@@ -451,10 +451,71 @@ export interface AudiobookSentence {
   generation_status?: 'loading_model' | 'generating' | 'completed' | 'failed';
   generation_error?: string;
   duration?: number;
+  audio_path?: string;
   profile_id?: string;
   profile_name?: string;
   engine?: string;
   model_size?: string;
+  error_category?: '声音不存在' | '显存不足' | '模型错误' | '主动取消';
+  audio_takes: AudiobookAudioTake[];
+}
+
+export interface AudiobookAudioTake {
+  generation_id: string;
+  status: 'loading_model' | 'generating' | 'completed' | 'failed';
+  error?: string;
+  duration?: number;
+  audio_path?: string;
+  profile_id?: string;
+  profile_name?: string;
+  engine?: string;
+  model_size?: string;
+  created_at: string;
+  selected: boolean;
+}
+
+export interface AudiobookSentenceSnapshot {
+  deletion_id?: string;
+  original_sentence_id?: string;
+  chapter_id?: string;
+  text: string;
+  paragraph_index: number;
+  position: number;
+  generation_id?: string;
+  deleted_at?: string;
+}
+
+export type AudiobookSentenceStatus = Pick<
+  AudiobookSentence,
+  | 'id'
+  | 'generation_id'
+  | 'generation_status'
+  | 'generation_error'
+  | 'error_category'
+  | 'duration'
+  | 'audio_path'
+  | 'profile_id'
+  | 'profile_name'
+  | 'engine'
+  | 'model_size'
+  | 'audio_takes'
+>;
+
+export interface AudiobookDeletedSentence extends AudiobookSentenceSnapshot {
+  deletion_id: string;
+  original_sentence_id: string;
+  chapter_id: string;
+  deleted_at: string;
+}
+
+export interface AudiobookGenerationPlan {
+  id: string;
+  audiobook_id: string;
+  chapter_id: string;
+  sentence_count: number;
+  next_index: number;
+  status: 'running' | 'completed' | 'cancelled' | 'failed';
+  performance_mode: 'stable' | 'fast';
 }
 
 export interface AudiobookChapter {

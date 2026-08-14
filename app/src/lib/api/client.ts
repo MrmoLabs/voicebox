@@ -157,8 +157,113 @@ class ApiClient {
     return this.request<AudiobookSentence>(`/audiobooks/chapters/${chapterId}/sentences`, { method: 'POST', body: JSON.stringify(data) });
   }
 
-  async deleteAudiobookSentence(sentenceId: string): Promise<void> {
-    await this.request(`/audiobooks/sentences/${sentenceId}`, { method: 'DELETE' });
+  async reorderAudiobookSentences(chapterId: string, sentenceIds: string[]): Promise<AudiobookChapter> {
+    return this.request<AudiobookChapter>(`/audiobooks/chapters/${chapterId}/sentences/reorder`, {
+      method: 'PUT',
+      body: JSON.stringify({ sentence_ids: sentenceIds }),
+    });
+  }
+
+  async deleteAudiobookSentence(sentenceId: string): Promise<{ snapshot: import('./types').AudiobookSentenceSnapshot }> {
+    // Use an explicit action endpoint. Some packaged backend/router versions
+    // exposed PATCH but dropped DELETE when merging the same path template.
+    return this.request(`/audiobooks/sentences/${sentenceId}/delete`, { method: 'POST' });
+  }
+
+  async restoreAudiobookSentence(chapterId: string, snapshot: import('./types').AudiobookSentenceSnapshot): Promise<AudiobookSentence> {
+    return this.request<AudiobookSentence>(`/audiobooks/chapters/${chapterId}/sentences/restore`, {
+      method: 'POST', body: JSON.stringify(snapshot),
+    });
+  }
+
+  async deleteAudiobookSentences(sentenceIds: string[]): Promise<{ snapshots: import('./types').AudiobookSentenceSnapshot[] }> {
+    return this.request('/audiobooks/sentences/batch-delete', {
+      method: 'POST', body: JSON.stringify({ sentence_ids: sentenceIds }),
+    });
+  }
+
+  async deleteAudiobookSentenceAudio(sentenceId: string): Promise<void> {
+    await this.request(`/audiobooks/sentences/${sentenceId}/audio/delete`, { method: 'POST' });
+  }
+
+  async deleteObsoleteAudiobookSentenceAudio(sentenceId: string, generationId: string): Promise<void> {
+    await this.request(`/audiobooks/sentences/${sentenceId}/obsolete-audio/${generationId}/delete`, { method: 'POST' });
+  }
+
+  async permanentlyDeleteAudiobookSentence(deletionId: string): Promise<void> {
+    await this.request(`/audiobooks/deleted-sentences/${deletionId}/delete`, { method: 'POST' });
+  }
+
+  async selectAudiobookSentenceAudio(sentenceId: string, generationId: string): Promise<AudiobookSentence> {
+    return this.request<AudiobookSentence>(`/audiobooks/sentences/${sentenceId}/audio/${generationId}/select`, { method: 'POST' });
+  }
+
+  async deleteAudiobookSentenceAudioTake(sentenceId: string, generationId: string): Promise<void> {
+    await this.request(`/audiobooks/sentences/${sentenceId}/audio/${generationId}/delete`, { method: 'POST' });
+  }
+
+  async listDeletedAudiobookSentences(chapterId: string): Promise<import('./types').AudiobookDeletedSentence[]> {
+    return this.request(`/audiobooks/chapters/${chapterId}/deleted-sentences`);
+  }
+
+  async restoreAudiobookSentences(chapterId: string, deletionIds: string[]): Promise<AudiobookSentence[]> {
+    return this.request(`/audiobooks/chapters/${chapterId}/sentences/batch-restore`, {
+      method: 'POST', body: JSON.stringify({ deletion_ids: deletionIds }),
+    });
+  }
+
+  async createAudiobookGenerationPlan(
+    bookId: string,
+    data: {
+      chapter_id: string;
+      sentence_ids: string[];
+      profile_id: string;
+      language: string;
+      engine: string;
+      model_size?: string;
+      instruct?: string;
+      performance_mode: 'stable' | 'fast';
+    },
+  ): Promise<import('./types').AudiobookGenerationPlan> {
+    const endpoint = `/audiobooks/${bookId}/generation-plans`;
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        if (attempt) await new Promise((resolve) => window.setTimeout(resolve, 1000 * attempt));
+        await this.getHealth();
+        return await this.request(endpoint, {
+          method: 'POST', body: JSON.stringify(data),
+        });
+      } catch (error) {
+        lastError = error;
+        // A response can be lost after the backend committed the plan. Check
+        // before retrying so a transient disconnect cannot create duplicates.
+        try {
+          const active = await this.getActiveAudiobookGenerationPlan(bookId);
+          if (active) return active;
+        } catch {
+          // Backend is still coming online; retry below.
+        }
+        if (!(error instanceof TypeError)) throw error;
+      }
+    }
+    throw new Error(
+      `无法连接语音后端，请等待后端启动完成后重试。${lastError instanceof Error ? ` ${lastError.message}` : ''}`,
+    );
+  }
+
+  async getActiveAudiobookGenerationPlan(bookId: string): Promise<import('./types').AudiobookGenerationPlan | null> {
+    return this.request(`/audiobooks/${bookId}/generation-plans/active`);
+  }
+
+  async getAudiobookSentenceStatuses(chapterId: string): Promise<import('./types').AudiobookSentenceStatus[]> {
+    return this.request(`/audiobooks/chapters/${chapterId}/sentence-statuses`);
+  }
+
+  async exportAudiobookChapter(chapterId: string, pauseMs: number): Promise<Blob> {
+    const response = await fetch(`${this.getBaseUrl()}/audiobooks/chapters/${chapterId}/export-audio?pause_ms=${pauseMs}`);
+    if (!response.ok) throw new Error(await response.text());
+    return response.blob();
   }
 
   async cancelAudiobookGeneration(bookId: string): Promise<AudiobookCancelResponse> {

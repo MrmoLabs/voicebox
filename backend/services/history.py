@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import or_
 
 from ..models import GenerationRequest, GenerationResponse, HistoryQuery, HistoryResponse, HistoryListResponse, GenerationVersionResponse, EffectConfig
-from ..database import Generation as DBGeneration, GenerationVersion as DBGenerationVersion, VoiceProfile as DBVoiceProfile
+from ..database import AudiobookSentence as DBAudiobookSentence, Generation as DBGeneration, GenerationVersion as DBGenerationVersion, VoiceProfile as DBVoiceProfile
 from .. import config
 
 
@@ -182,6 +182,17 @@ async def list_generations(
     ).join(
         DBVoiceProfile,
         DBGeneration.profile_id == DBVoiceProfile.id
+    )
+    # Audiobook generations are managed sentence-by-sentence on the book page
+    # and would otherwise flood the ordinary generation history.
+    # Also exclude rows already bound to a book. This covers projects created
+    # by older builds before the source marker was written correctly.
+    audiobook_generation_ids = db.query(DBAudiobookSentence.generation_id).filter(
+        DBAudiobookSentence.generation_id.isnot(None)
+    )
+    q = q.filter(
+        DBGeneration.source != "audiobook",
+        ~DBGeneration.id.in_(audiobook_generation_ids),
     )
     
     # Apply profile filter

@@ -141,9 +141,14 @@ class Qwen3TTSModel:
         optimization_mode = os.environ.get("VOICEBOX_TTS_OPTIMIZE", "0").lower()
         if torch.cuda.is_available() and optimization_mode != "0":
             try:
-                if optimization_mode == "codebook":
-                    instance.model.talker.code_predictor.enable_compile(mode="reduce-overhead")
-                    print("[CodePredictor] Enabled isolated compilation")
+                if optimization_mode in ("codebook", "codebook-safe"):
+                    # "default" retains kernel compilation without the CUDA
+                    # graphs used by reduce-overhead. Variable-length book
+                    # sentences are not safe to replay through a captured
+                    # graph, but still benefit from compiled code prediction.
+                    compile_mode = "default" if optimization_mode == "codebook-safe" else "reduce-overhead"
+                    instance.model.talker.code_predictor.enable_compile(mode=compile_mode)
+                    print(f"[CodePredictor] Enabled isolated compilation ({compile_mode})")
                 elif optimization_mode == "decoder":
                     instance.model.speech_tokenizer.enable_streaming_optimizations(
                         decode_window_frames=300,

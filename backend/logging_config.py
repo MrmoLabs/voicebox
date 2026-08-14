@@ -41,12 +41,26 @@ def configure_persistent_logging(data_dir: str | Path) -> Path:
         if getattr(handler, "_voicebox_log_path", None) == resolved:
             return log_path
 
-    handler = RotatingFileHandler(
-        log_path,
-        maxBytes=LOG_MAX_BYTES,
-        backupCount=LOG_BACKUP_COUNT,
-        encoding="utf-8",
-    )
+    try:
+        handler = RotatingFileHandler(
+            log_path,
+            maxBytes=LOG_MAX_BYTES,
+            backupCount=LOG_BACKUP_COUNT,
+            encoding="utf-8",
+        )
+    except PermissionError:
+        # Windows can briefly retain an exclusive handle after a forced
+        # backend shutdown. Logging must never prevent the server from
+        # starting; use a process-specific fallback until the next restart.
+        import os
+
+        log_path = log_dir / f"server-{os.getpid()}.log"
+        handler = RotatingFileHandler(
+            log_path,
+            maxBytes=LOG_MAX_BYTES,
+            backupCount=1,
+            encoding="utf-8",
+        )
     handler._voicebox_log_path = resolved  # type: ignore[attr-defined]
     handler.setFormatter(
         _JsonLineFormatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")

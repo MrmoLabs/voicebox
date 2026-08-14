@@ -686,10 +686,10 @@ async fn start_server(
                 if let Some(ref dir) = effective_models_dir { cmd = cmd.env("VOICEBOX_MODELS_DIR", dir); }
                 if portable_available {
                     let compile_cache = data_dir.join("cache").join("torch-compile");
-                    // Variable-length audiobook sentences can invalidate the
-                    // CUDA graphs used by torch.compile reduce-overhead mode.
-                    // Prefer stable eager inference for the packaged backend.
-                    cmd = cmd.env("VOICEBOX_TTS_OPTIMIZE", "0");
+                    // Compile the repeated code predictor without enabling
+                    // reduce-overhead CUDA graphs, which are unsafe across
+                    // variable-length audiobook sentences.
+                    cmd = cmd.env("VOICEBOX_TTS_OPTIMIZE", "codebook-safe");
                     cmd = cmd.env(
                         "TORCHINDUCTOR_CACHE_DIR",
                         compile_cache.join("inductor").to_string_lossy().as_ref(),

@@ -17,7 +17,7 @@ PERFORMANCE_DEPENDENCIES = ROOT / "performance-site-packages"
 QWEN_SOURCE = ROOT / "qwen-source"
 
 os.environ.setdefault("VOICEBOX_BACKEND_VARIANT", "cuda")
-os.environ.setdefault("VOICEBOX_TTS_OPTIMIZE", "0")
+os.environ.setdefault("VOICEBOX_TTS_OPTIMIZE", "codebook-safe")
 # Voicebox 0.5.1 desktop builds passed these process-wide flags to the
 # portable backend. Clear them before importing HuggingFace so explicit model
 # downloads remain online; cached loads use local_files_only in each backend.

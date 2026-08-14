@@ -10,6 +10,8 @@ from .. import config
 from .models import (
     Base,
     AudioChannel,
+    AudiobookSentence,
+    AudiobookSentenceAudio,
     EffectPreset,
     Generation,
     GenerationVersion,
@@ -62,6 +64,18 @@ def init_db() -> None:
                     channel_id=default_channel.id,
                 ))
             db.commit()
+
+        known_generation_ids = {
+            row[0] for row in db.query(AudiobookSentenceAudio.generation_id).all()
+        }
+        for sentence in db.query(AudiobookSentence).filter(AudiobookSentence.generation_id.isnot(None)).all():
+            if sentence.generation_id not in known_generation_ids:
+                db.add(AudiobookSentenceAudio(
+                    sentence_id=sentence.id,
+                    generation_id=sentence.generation_id,
+                ))
+                known_generation_ids.add(sentence.generation_id)
+        db.commit()
     finally:
         db.close()
 

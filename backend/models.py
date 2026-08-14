@@ -736,6 +736,20 @@ class AudiobookChapterCreate(BaseModel):
     source_text: str = Field(default="", max_length=500000)
 
 
+class AudiobookAudioTakeResponse(BaseModel):
+    generation_id: str
+    status: str
+    error: Optional[str] = None
+    duration: Optional[float] = None
+    audio_path: Optional[str] = None
+    profile_id: Optional[str] = None
+    profile_name: Optional[str] = None
+    engine: Optional[str] = None
+    model_size: Optional[str] = None
+    created_at: datetime
+    selected: bool = False
+
+
 class AudiobookSentenceResponse(BaseModel):
     id: str
     chapter_id: str
@@ -746,10 +760,28 @@ class AudiobookSentenceResponse(BaseModel):
     generation_status: Optional[str] = None
     generation_error: Optional[str] = None
     duration: Optional[float] = None
+    audio_path: Optional[str] = None
     profile_id: Optional[str] = None
     profile_name: Optional[str] = None
     engine: Optional[str] = None
     model_size: Optional[str] = None
+    error_category: Optional[str] = None
+    audio_takes: List[AudiobookAudioTakeResponse] = []
+
+
+class AudiobookSentenceStatusResponse(BaseModel):
+    id: str
+    generation_id: Optional[str] = None
+    generation_status: Optional[str] = None
+    generation_error: Optional[str] = None
+    error_category: Optional[str] = None
+    duration: Optional[float] = None
+    audio_path: Optional[str] = None
+    profile_id: Optional[str] = None
+    profile_name: Optional[str] = None
+    engine: Optional[str] = None
+    model_size: Optional[str] = None
+    audio_takes: List[AudiobookAudioTakeResponse] = []
 
 
 class AudiobookChapterResponse(BaseModel):
@@ -796,10 +828,62 @@ class AudiobookSentenceCreate(BaseModel):
     position: Optional[int] = Field(None, ge=0)
 
 
+class AudiobookSentenceReorder(BaseModel):
+    sentence_ids: List[str] = Field(..., min_length=1)
+
+
+class AudiobookSentenceRestore(BaseModel):
+    deletion_id: Optional[str] = None
+    text: str = Field(..., min_length=1, max_length=5000)
+    paragraph_index: int = Field(..., ge=0)
+    position: int = Field(..., ge=0)
+    generation_id: Optional[str] = None
+
+
+class AudiobookSentenceBatchRequest(BaseModel):
+    sentence_ids: List[str] = Field(..., min_length=1, max_length=1000)
+
+
+class AudiobookSentenceBatchRestoreRequest(BaseModel):
+    deletion_ids: List[str] = Field(..., min_length=1, max_length=1000)
+
+
+class AudiobookDeletedSentenceResponse(BaseModel):
+    deletion_id: str
+    original_sentence_id: str
+    chapter_id: str
+    text: str
+    paragraph_index: int
+    position: int
+    generation_id: Optional[str] = None
+    deleted_at: datetime
+
+
 class AudiobookCancelResponse(BaseModel):
     matched: int
     cancelled: int
     already_finished: int
+
+
+class AudiobookGenerationPlanCreate(BaseModel):
+    chapter_id: str
+    sentence_ids: List[str] = Field(..., min_length=1, max_length=5000)
+    profile_id: str
+    language: str = "zh"
+    engine: str = "qwen"
+    model_size: Optional[str] = None
+    instruct: Optional[str] = None
+    performance_mode: str = Field(default="stable", pattern="^(stable|fast)$")
+
+
+class AudiobookGenerationPlanResponse(BaseModel):
+    id: str
+    audiobook_id: str
+    chapter_id: str
+    sentence_count: int
+    next_index: int
+    status: str
+    performance_mode: str
 
 
 class EffectConfig(BaseModel):

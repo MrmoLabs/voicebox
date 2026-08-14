@@ -156,6 +156,49 @@ class AudiobookSentence(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class AudiobookSentenceAudio(Base):
+    """One retained TTS take belonging to an audiobook sentence."""
+
+    __tablename__ = "audiobook_sentence_audio"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    sentence_id = Column(String, nullable=False, index=True)
+    generation_id = Column(String, ForeignKey("generations.id"), nullable=False, unique=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class AudiobookDeletedSentence(Base):
+    """Recoverable snapshot of a deleted audiobook sentence."""
+
+    __tablename__ = "audiobook_deleted_sentences"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    original_sentence_id = Column(String, nullable=False)
+    chapter_id = Column(String, ForeignKey("audiobook_chapters.id"), nullable=False)
+    generation_id = Column(String, ForeignKey("generations.id"), nullable=True)
+    text = Column(Text, nullable=False)
+    paragraph_index = Column(Integer, nullable=False, default=0)
+    position = Column(Integer, nullable=False, default=0)
+    deleted_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class AudiobookGenerationPlan(Base):
+    """Restart-safe plan for sequential audiobook sentence generation."""
+
+    __tablename__ = "audiobook_generation_plans"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    audiobook_id = Column(String, ForeignKey("audiobooks.id"), nullable=False)
+    chapter_id = Column(String, ForeignKey("audiobook_chapters.id"), nullable=False)
+    sentence_ids = Column(JSON, nullable=False)
+    request_settings = Column(JSON, nullable=False)
+    submitted_generation_ids = Column(JSON, nullable=False, default=dict)
+    status = Column(String, nullable=False, default="running")
+    next_index = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class Project(Base):
     """Audio studio project (JSON blob)."""
 

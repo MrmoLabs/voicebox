@@ -112,6 +112,7 @@ from .services import tts, transcribe, llm
 from .database import get_db
 from .utils.platform_detect import get_backend_type
 from .utils.progress import get_progress_manager
+from .utils.tasks import get_task_manager
 from .services.task_queue import create_background_task, init_queue
 from .routes import register_routers
 
@@ -312,7 +313,8 @@ async def _run_startup(application: FastAPI) -> None:
 
     init_queue()
 
-    # Mark stale "generating" records as failed -- leftovers from a killed process
+    # Ordinary stale jobs cannot be reconstructed reliably, but audiobook jobs
+    # persist all essential synthesis inputs and are resumed below.
     from sqlalchemy import text as sa_text
 
     db = next(get_db())
@@ -321,13 +323,68 @@ async def _run_startup(application: FastAPI) -> None:
             sa_text(
                 "UPDATE generations SET status = 'failed', "
                 "error = 'Server was shut down during generation' "
-                "WHERE status IN ('generating', 'loading_model')"
+                "WHERE status IN ('generating', 'loading_model') "
+                "AND id NOT IN (SELECT generation_id FROM audiobook_sentences "
+                "WHERE generation_id IS NOT NULL)"
             )
         )
         if result.rowcount > 0:
             logger.info("Marked %d stale generation(s) as failed", result.rowcount)
 
-        from .database import VoiceProfile as DBVoiceProfile, Generation as DBGeneration
+        # Older audiobook jobs were created before source tagging was
+        # enforced. Backfill them so the global completion listener can never
+        # apply the normal generate-page autoplay policy to book audio.
+        db.execute(
+            sa_text(
+                "UPDATE generations SET source = 'audiobook' "
+                "WHERE id IN (SELECT generation_id FROM audiobook_sentences "
+                "WHERE generation_id IS NOT NULL)"
+            )
+        )
+
+        from .database import (
+            AudiobookSentence as DBAudiobookSentence,
+            VoiceProfile as DBVoiceProfile,
+            Generation as DBGeneration,
+        )
+
+        resumable = (
+            db.query(DBGeneration)
+            .join(DBAudiobookSentence, DBAudiobookSentence.generation_id == DBGeneration.id)
+            .filter(DBGeneration.status.in_(("generating", "loading_model")))
+            .all()
+        )
+        if resumable:
+            from .services.generation import run_generation
+            from .services.task_queue import enqueue_generation
+
+            task_manager = get_task_manager()
+            for generation in resumable:
+                if not db.query(DBVoiceProfile).filter_by(id=generation.profile_id).first():
+                    generation.status = "failed"
+                    generation.error = "Profile not found while resuming audiobook generation"
+                    continue
+                task_manager.start_generation(
+                    task_id=generation.id,
+                    profile_id=generation.profile_id,
+                    text=generation.text,
+                )
+                enqueue_generation(
+                    generation.id,
+                    run_generation(
+                        generation_id=generation.id,
+                        profile_id=generation.profile_id,
+                        text=generation.text,
+                        language=generation.language,
+                        engine=generation.engine or "qwen",
+                        model_size=generation.model_size,
+                        seed=generation.seed,
+                        normalize=True,
+                        instruct=generation.instruct,
+                        mode="generate",
+                    ),
+                )
+            logger.info("Resumed %d audiobook generation(s)", len(resumable))
 
         profile_count = db.query(DBVoiceProfile).count()
         generation_count = db.query(DBGeneration).count()
@@ -339,6 +396,15 @@ async def _run_startup(application: FastAPI) -> None:
         logger.warning("Could not clean up stale generations: %s", e)
     finally:
         db.close()
+
+    try:
+        from .services.audiobook_generation_plans import resume_running_plans
+
+        resumed_plans = await resume_running_plans()
+        if resumed_plans:
+            logger.info("Resumed %d audiobook generation plan(s)", resumed_plans)
+    except Exception:
+        logger.exception("Could not resume audiobook generation plans")
 
     backend_type = get_backend_type()
     logger.info("Backend: %s", backend_type.upper())
