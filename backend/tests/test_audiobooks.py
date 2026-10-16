@@ -48,6 +48,45 @@ def test_split_long_text_preserves_paragraphs_and_punctuation():
     assert [item["position"] for item in sentences] == list(range(5))
 
 
+def test_sentence_polling_includes_generation_stage_elapsed_and_eta(monkeypatch):
+    from backend.utils.generation_progress import generation_progress
+    from backend.utils import generation_progress as progress_module
+    clock = [100.0]
+    monkeypatch.setattr(progress_module.time, "monotonic", lambda: clock[0])
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine)()
+    try:
+        db.add(VoiceProfile(id="progress-voice", name="Narrator", language="zh"))
+        db.commit()
+        book = create_audiobook(models.AudiobookCreate(title="进度验收"), db)
+        chapter = create_chapter(book.id, models.AudiobookChapterCreate(title="第一章"), db)
+        sentence = create_sentence(chapter.id, models.AudiobookSentenceCreate(text="第一句。"), db)
+        db.add(Generation(id="book-progress", profile_id="progress-voice", text="第一句。", language="zh", status="generating"))
+        db.commit()
+        update_sentence(sentence.id, models.AudiobookSentenceUpdate(generation_id="book-progress"), db)
+        generation_progress.start("book-progress")
+        generation_progress.stage("book-progress", "preparing_voice")
+        row = audiobook_routes.get_sentence_statuses(chapter.id, db)[0]
+        progress = models.AudiobookSentenceStatusResponse.model_validate(row).generation_progress
+        assert progress["stage"] == "preparing_voice"
+        assert progress["elapsed_seconds"] >= 0
+        generation_progress.stage("book-progress", "generating")
+        clock[0] += 5
+        generation_progress.chunks("book-progress", 1, 2, 5, 10)
+        row = audiobook_routes.get_sentence_statuses(chapter.id, db)[0]
+        assert row["generation_progress"]["completed_chunks"] == 1
+        assert row["generation_progress"]["estimated_remaining_seconds"] is not None
+        generation = db.query(Generation).filter_by(id="book-progress").one()
+        generation.status = "completed"
+        db.commit()
+        assert audiobook_routes.get_sentence_statuses(chapter.id, db)[0]["generation_progress"] is None
+    finally:
+        generation_progress.finish("book-progress")
+        db.close()
+        engine.dispose()
+
+
 def test_audiobook_tables_are_created():
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)

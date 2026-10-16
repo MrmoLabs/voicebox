@@ -490,6 +490,7 @@ def list_deleted_sentences(chapter_id: str, db: Session = Depends(get_db)):
     response_model=list[models.AudiobookSentenceStatusResponse],
 )
 def get_sentence_statuses(chapter_id: str, db: Session = Depends(get_db)):
+    from ..utils.generation_progress import generation_progress
     if not db.query(AudiobookChapter).filter_by(id=chapter_id).first():
         raise HTTPException(404, "Chapter not found")
     rows = db.query(AudiobookSentence).filter_by(chapter_id=chapter_id).all()
@@ -521,6 +522,7 @@ def get_sentence_statuses(chapter_id: str, db: Session = Depends(get_db)):
             "id": row.id,
             "generation_id": row.generation_id,
             "generation_status": (generation.status or "completed") if generation else None,
+            "generation_progress": generation_progress.snapshot(generation.id) if generation and generation.status in ("loading_model", "generating") else None,
             "generation_error": generation.error if generation else None,
             "error_category": error_category,
             "duration": generation.duration if generation else None,

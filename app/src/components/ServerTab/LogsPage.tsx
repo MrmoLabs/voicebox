@@ -17,13 +17,17 @@ function formatTime(timestamp: number): string {
 function LogLine({ entry }: { entry: LogEntry }) {
   return (
     <div className="flex gap-3 font-mono text-xs leading-5 hover:bg-muted/30">
-      <span className="text-muted-foreground/50 select-none shrink-0">
+      <span className="text-neutral-600 dark:text-neutral-400 select-none shrink-0">
         {formatTime(entry.timestamp)}
       </span>
       <span
         className={cn(
           'whitespace-pre-wrap break-all',
-          entry.stream === 'stderr' ? 'text-orange-400/80' : 'text-muted-foreground',
+          /\b(ERROR|CRITICAL|Traceback)\b/.test(entry.line)
+            ? 'text-red-700 dark:text-red-400'
+            : /\bWARNING\b/.test(entry.line)
+              ? 'text-amber-800 dark:text-amber-300'
+              : 'text-foreground',
         )}
       >
         {entry.line}
@@ -85,10 +89,10 @@ export function LogsPage() {
       <div
         ref={containerRef}
         onScroll={handleScroll}
-        className="flex-1 min-h-0 overflow-y-auto rounded-md border bg-black/20 p-3"
+        className="flex-1 min-h-0 overflow-y-auto rounded-md border bg-card p-3"
       >
         {entries.length === 0 ? (
-          <div className="text-sm text-muted-foreground/50 font-mono space-y-1">
+          <div className="text-sm text-muted-foreground font-mono space-y-1">
             <p>{t('settings.logs.empty')}</p>
             {!import.meta.env?.PROD && <p>{t('settings.logs.devHint')}</p>}
           </div>

@@ -632,13 +632,18 @@ def engine_has_model_sizes(engine: str) -> bool:
 
 async def load_engine_model(engine: str, model_size: str = "default") -> None:
     """Load a model for the given engine, handling engines with multiple model sizes."""
-    backend = get_tts_backend_for_engine(engine)
-    if engine in ("qwen", "qwen_custom_voice"):
-        await backend.load_model_async(model_size)
-    elif engine == "tada":
-        await backend.load_model(model_size)
-    else:
-        await backend.load_model()
+    from ..utils.model_runtime import runtime_lease, model_operation, finish_awaitable
+    config = next((item for item in get_tts_model_configs() if item.engine == engine and
+                   (item.model_size == model_size or engine not in ("qwen", "qwen_custom_voice", "tada"))), None)
+    name = config.model_name if config else engine
+    async with runtime_lease("载入模型"), model_operation(name, "loading"):
+        backend = get_tts_backend_for_engine(engine)
+        if engine in ("qwen", "qwen_custom_voice"):
+            await finish_awaitable(backend.load_model_async(model_size))
+        elif engine == "tada":
+            await finish_awaitable(backend.load_model(model_size))
+        else:
+            await finish_awaitable(backend.load_model())
 
 
 async def ensure_model_cached_or_raise(engine: str, model_size: str = "default") -> None:

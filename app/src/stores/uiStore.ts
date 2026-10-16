@@ -39,6 +39,8 @@ interface UIStore {
 
   // Modals
   profileDialogOpen: boolean;
+  requestedVoiceSource: 'clone' | 'builtin' | 'design' | null;
+  setRequestedVoiceSource: (source: 'clone' | 'builtin' | 'design' | null) => void;
   setProfileDialogOpen: (open: boolean) => void;
   editingProfileId: string | null;
   setEditingProfileId: (id: string | null) => void;
@@ -74,6 +76,8 @@ export const useUIStore = create<UIStore>()(
       setSidebarOpen: (open) => set({ sidebarOpen: open }),
 
       profileDialogOpen: false,
+      requestedVoiceSource: null,
+      setRequestedVoiceSource: (source) => set({ requestedVoiceSource: source }),
       setProfileDialogOpen: (open) => set({ profileDialogOpen: open }),
       editingProfileId: null,
       setEditingProfileId: (id) => set({ editingProfileId: id }),

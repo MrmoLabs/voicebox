@@ -102,6 +102,7 @@ class GenerationRequest(BaseModel):
         default=50, ge=0, le=500, description="Crossfade duration in ms between chunks (0 for hard cut)"
     )
     normalize: bool = Field(default=True, description="Normalize output audio volume")
+    stream_audio: bool = Field(default=False, description="Enable incremental PCM preview for CUDA Qwen Base")
     effects_chain: Optional[List["EffectConfig"]] = Field(
         None, description="Effects chain to apply after generation (overrides profile default)"
     )
@@ -516,6 +517,11 @@ class ModelStatus(BaseModel):
     downloading: bool = False  # True if download is in progress
     size_mb: Optional[float] = None
     loaded: bool = False
+    operation: str = "idle"
+    operation_elapsed_seconds: Optional[float] = None
+    operation_error: Optional[str] = None
+    runtime_busy: bool = False
+    runtime_activity: Optional[str] = None
 
 
 class ModelStatusListResponse(BaseModel):
@@ -552,6 +558,7 @@ class ModelLoadRequest(BaseModel):
 
     model_name: Optional[str] = None
     model_size: Optional[str] = None
+    replace_loaded: bool = False
 
 
 class ModelMigrateRequest(BaseModel):
@@ -806,6 +813,7 @@ class AudiobookSentenceResponse(BaseModel):
     paragraph_index: int
     position: int
     generation_status: Optional[str] = None
+    generation_progress: Optional[dict] = None
     generation_error: Optional[str] = None
     duration: Optional[float] = None
     audio_path: Optional[str] = None
@@ -821,6 +829,7 @@ class AudiobookSentenceStatusResponse(BaseModel):
     id: str
     generation_id: Optional[str] = None
     generation_status: Optional[str] = None
+    generation_progress: Optional[dict] = None
     generation_error: Optional[str] = None
     error_category: Optional[str] = None
     duration: Optional[float] = None

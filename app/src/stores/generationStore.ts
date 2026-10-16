@@ -1,6 +1,19 @@
 import { create } from 'zustand';
 
+export interface GenerationProgressData {
+  stage: 'queued' | 'loading_model' | 'preparing_voice' | 'generating' | 'finalizing';
+  elapsed_seconds: number;
+  stage_elapsed_seconds: number;
+  completed_chunks: number;
+  total_chunks: number;
+  percent: number | null;
+  estimated_remaining_seconds: number | null;
+  estimate_overdue: boolean;
+}
+
 interface GenerationState {
+  progressById: Record<string, GenerationProgressData>;
+  setProgress: (id: string, progress: GenerationProgressData) => void;
   /** IDs of generations currently in progress */
   pendingGenerationIds: Set<string>;
   /** Whether any generation is in progress (derived from pendingGenerationIds) */
@@ -16,6 +29,9 @@ interface GenerationState {
 }
 
 export const useGenerationStore = create<GenerationState>((set, get) => ({
+  progressById: {},
+  setProgress: (id, progress) =>
+    set((state) => ({ progressById: { ...state.progressById, [id]: progress } })),
   pendingGenerationIds: new Set(),
   isGenerating: false,
   activeGenerationId: null,
@@ -32,7 +48,9 @@ export const useGenerationStore = create<GenerationState>((set, get) => ({
     set((state) => {
       const next = new Set(state.pendingGenerationIds);
       next.delete(id);
-      return { pendingGenerationIds: next, isGenerating: next.size > 0 };
+      const progressById = { ...state.progressById };
+      delete progressById[id];
+      return { pendingGenerationIds: next, isGenerating: next.size > 0, progressById };
     }),
 
   addPendingStoryAdd: (generationId, storyId) =>

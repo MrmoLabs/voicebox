@@ -17,6 +17,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/use-toast';
 import { apiClient } from '@/lib/api/client';
 import { engineSupportsInstruct } from '@/lib/constants/engines';
+import { isProfileCompatibleWithEngine } from '@/lib/constants/voiceCompatibility';
 import { getLanguageOptionsForEngine, type LanguageCode } from '@/lib/constants/languages';
 import { useGenerationForm } from '@/lib/hooks/useGenerationForm';
 import { useProfile, useProfiles } from '@/lib/hooks/useProfiles';
@@ -27,6 +28,7 @@ import { useStoryStore } from '@/stores/storyStore';
 import { useUIStore } from '@/stores/uiStore';
 import { EngineModelSelector } from './EngineModelSelector';
 import { ParalinguisticInput } from './ParalinguisticInput';
+import { ModelRuntimeControl, engineModelName } from './ModelRuntimeControl';
 
 interface FloatingGenerateBoxProps {
   isPlayerOpen?: boolean;
@@ -46,6 +48,11 @@ export function FloatingGenerateBox({
   const [isExpanded, setIsExpanded] = useState(false);
   const [isInstructExpanded, setIsInstructExpanded] = useState(false);
   const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null);
+  const [livePreview, setLivePreview] = useState(false);
+  const [liveWarmup, setLiveWarmup] = useState<{ key: string; ready: boolean; error?: string }>({
+    key: '',
+    ready: false,
+  });
   const containerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const matchRoute = useMatchRoute();
@@ -80,6 +87,11 @@ export function FloatingGenerateBox({
   const hasTrackEditor = isStoriesRoute && currentStory && currentStory.items.length > 0;
 
   const { form, handleSubmit, isPending } = useGenerationForm({
+    livePreview:
+      livePreview &&
+      !isStoriesRoute &&
+      !selectedPresetId &&
+      (selectedProfile?.effects_chain?.length ?? 0) === 0,
     onSuccess: async (generationId) => {
       setIsExpanded(false);
       // Defer the story add until TTS completes -- useGenerationProgress handles it
@@ -138,6 +150,58 @@ export function FloatingGenerateBox({
 
   // Sync engine selection to global store so ProfileList can filter
   const watchedEngine = form.watch('engine');
+  const profileMismatch =
+    !!selectedProfile && !isProfileCompatibleWithEngine(selectedProfile, watchedEngine || 'qwen');
+  const watchedModelSize = form.watch('modelSize') || '1.7B';
+  const warmupKey = `${selectedProfileId}:${watchedModelSize}`;
+  useEffect(() => {
+    if (
+      watchedEngine !== 'qwen' ||
+      selectedPresetId ||
+      (selectedProfile?.effects_chain?.length ?? 0) > 0
+    )
+      setLivePreview(false);
+  }, [watchedEngine, selectedPresetId, selectedProfile?.effects_chain]);
+  useEffect(() => {
+    if (!livePreview || !selectedProfileId || watchedEngine !== 'qwen') return;
+    let disposed = false;
+    setLiveWarmup({ key: warmupKey, ready: false });
+    void (async () => {
+      try {
+        const routing = await apiClient.getProfileChannels(selectedProfileId);
+        if (routing.channel_ids.length) {
+          const channels = await apiClient.listChannels();
+          if (
+            channels.some(
+              (channel) =>
+                routing.channel_ids.includes(channel.id) &&
+                !channel.is_default &&
+                channel.device_ids.length > 0,
+            )
+          ) {
+            throw new Error(
+              t(
+                'generation.live.routingUnsupported',
+                'Live preview is not yet available for assigned output devices',
+              ),
+            );
+          }
+        }
+        await apiClient.warmLivePreview(selectedProfileId, watchedModelSize);
+        if (!disposed) setLiveWarmup({ key: warmupKey, ready: true });
+      } catch (error) {
+        if (!disposed)
+          setLiveWarmup({
+            key: warmupKey,
+            ready: false,
+            error: String(error instanceof Error ? error.message : error),
+          });
+      }
+    })();
+    return () => {
+      disposed = true;
+    };
+  }, [livePreview, selectedProfileId, watchedEngine, watchedModelSize, warmupKey, t]);
   useEffect(() => {
     if (watchedEngine) {
       setSelectedEngine(watchedEngine);
@@ -257,6 +321,8 @@ export function FloatingGenerateBox({
   }, [isExpanded]);
 
   async function onSubmit(data: Parameters<typeof handleSubmit>[0]) {
+    if (profileMismatch) return;
+    if (livePreview && (liveWarmup.key !== warmupKey || !liveWarmup.ready)) return;
     await handleSubmit(data, selectedProfileId);
   }
 
@@ -427,13 +493,19 @@ export function FloatingGenerateBox({
                                         ? 'bg-accent text-accent-foreground border border-accent hover:bg-accent/90'
                                         : 'bg-card border border-border hover:bg-background/50',
                                     )}
-                                    aria-label={active ? t('generation.persona.ariaLabelActive') : t('generation.persona.ariaLabelInactive')}
+                                    aria-label={
+                                      active
+                                        ? t('generation.persona.ariaLabelActive')
+                                        : t('generation.persona.ariaLabelInactive')
+                                    }
                                     aria-pressed={active}
                                   >
                                     <Wand2 className="h-4 w-4" />
                                   </Button>
                                   <span className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 whitespace-nowrap rounded-md bg-popover px-3 py-1.5 text-xs text-popover-foreground border border-border opacity-0 transition-opacity group-hover:opacity-100 z-[9999]">
-                                    {active ? t('generation.persona.tooltipActive') : t('generation.persona.tooltipInactive')}
+                                    {active
+                                      ? t('generation.persona.tooltipActive')
+                                      : t('generation.persona.tooltipInactive')}
                                   </span>
                                 </div>
                               </FormControl>
@@ -486,7 +558,12 @@ export function FloatingGenerateBox({
                 <div className="group relative">
                   <Button
                     type="submit"
-                    disabled={isPending || !selectedProfileId}
+                    disabled={
+                      isPending ||
+                      !selectedProfileId ||
+                      profileMismatch ||
+                      (livePreview && (liveWarmup.key !== warmupKey || !liveWarmup.ready))
+                    }
                     className="h-10 w-10 rounded-full bg-accent hover:bg-accent/90 hover:scale-105 text-accent-foreground shadow-lg hover:shadow-accent/50 transition-all duration-200"
                     size="icon"
                     aria-label={
@@ -579,7 +656,6 @@ export function FloatingGenerateBox({
                     </div>
                   )}
 
-
                   <FormField
                     control={form.control}
                     name="language"
@@ -610,7 +686,7 @@ export function FloatingGenerateBox({
                   />
 
                   <FormItem className="flex-1 space-y-0">
-                    <EngineModelSelector form={form} compact />
+                    <EngineModelSelector form={form} compact selectedProfile={selectedProfile} />
                   </FormItem>
 
                   <FormItem className="flex-1 space-y-0">
@@ -644,6 +720,72 @@ export function FloatingGenerateBox({
                 </div>
               </motion.div>
             </AnimatePresence>
+            {profileMismatch && (
+              <div
+                role="status"
+                className="mt-3 rounded-md border border-amber-500/40 px-3 py-2 text-xs space-y-2"
+              >
+                <p>
+                  {watchedEngine === 'qwen_voice_design'
+                    ? t(
+                        'generation.compatibility.design',
+                        'VoiceDesign creates a voice from a description. Select or create a designed voice; recordings require Qwen3-TTS Base.',
+                      )
+                    : t(
+                        'generation.compatibility.other',
+                        'This voice does not support the selected engine. Select a compatible voice above.',
+                      )}
+                </p>
+                {watchedEngine === 'qwen_voice_design' && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      const ui = useUIStore.getState();
+                      ui.setEditingProfileId(null);
+                      ui.setRequestedVoiceSource('design');
+                      ui.setProfileDialogOpen(true);
+                    }}
+                  >
+                    {t('generation.compatibility.create', 'Create a designed voice')}
+                  </Button>
+                )}
+              </div>
+            )}
+            {isExpanded && (
+              <div className="mt-3">
+                <ModelRuntimeControl
+                  modelName={engineModelName(watchedEngine || 'qwen', watchedModelSize)}
+                />
+              </div>
+            )}
+            {watchedEngine === 'qwen' && !isStoriesRoute && (
+              <div className="mt-3 px-2 text-xs text-muted-foreground space-y-1">
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={livePreview}
+                    disabled={
+                      !!selectedPresetId || (selectedProfile?.effects_chain?.length ?? 0) > 0
+                    }
+                    onChange={(event) => setLivePreview(event.target.checked)}
+                  />
+                  {t(
+                    'generation.live.enable',
+                    'Play while generating (test · CUDA · default output)',
+                  )}
+                </label>
+                {livePreview && (
+                  <div>
+                    {liveWarmup.key === warmupKey && liveWarmup.ready
+                      ? t('generation.live.ready', 'Live preview warmed and ready')
+                      : liveWarmup.error ||
+                        t('generation.live.warming', 'Warming live speech… You can keep editing.')}
+                  </div>
+                )}
+              </div>
+            )}
           </form>
         </Form>
       </motion.div>

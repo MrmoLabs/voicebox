@@ -1,5 +1,6 @@
 """Voice profile management module."""
 
+import asyncio
 import json as _json
 import logging
 import shutil
@@ -664,23 +665,29 @@ async def create_voice_prompt_for_profile(
         audio_paths.append(str(sample_audio_path))
     reference_texts = [s.reference_text for s in samples]
 
-    combined_audio, combined_text = await tts_model.combine_voice_prompts(
-        audio_paths,
-        reference_texts,
-    )
-
     # Save combined audio to cache directory (persistent)
-    # Create a hash of sample IDs to identify this specific combination
+    # Include ordered content hashes: edits/replacements and sample ordering
+    # must invalidate both combined audio and its derived voice prompt.
     import hashlib
+    from ..utils.cache import get_cache_key
 
-    sample_ids_str = "-".join(sorted([s.id for s in samples]))
-    combination_hash = hashlib.md5(sample_ids_str.encode()).hexdigest()[:12]
+    def reference_keys():
+        return [get_cache_key(path, reference) for path, reference in zip(audio_paths, reference_texts)]
+
+    sample_keys = await asyncio.to_thread(reference_keys)
+    combination_hash = hashlib.sha256((engine + "-" + "-".join(sample_keys)).encode()).hexdigest()[:16]
 
     cache_dir = _get_cache_dir()
     cache_dir.mkdir(parents=True, exist_ok=True)
     combined_path = cache_dir / f"combined_{profile_id}_{combination_hash}.wav"
 
-    save_audio(combined_audio, str(combined_path), 24000)
+    combined_text = " ".join(reference_texts)
+    if not use_cache or not combined_path.is_file():
+        combined_audio, combined_text = await tts_model.combine_voice_prompts(
+            audio_paths,
+            reference_texts,
+        )
+        await asyncio.to_thread(save_audio, combined_audio, str(combined_path), 24000)
 
     voice_prompt, _ = await tts_model.create_voice_prompt(
         str(combined_path),

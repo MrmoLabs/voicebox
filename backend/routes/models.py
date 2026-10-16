@@ -13,6 +13,7 @@ from ..utils.platform_detect import get_backend_type
 from ..services.task_queue import create_background_task
 from ..utils.progress import get_progress_manager
 from ..utils.tasks import get_task_manager
+from ..utils.model_runtime import runtime_guard, model_operation, operation_snapshot, finish_thread, finish_awaitable
 
 router = APIRouter()
 
@@ -50,6 +51,14 @@ def _copy_with_progress(src: Path, dst: Path, progress_manager, copied_so_far: i
 DEFAULT_QWEN_MODEL_SIZE = "1.7B"
 
 
+@router.get("/models/runtime")
+def get_model_runtime():
+    """Cheap polling endpoint: no cache scans or network metadata requests."""
+    from ..backends import get_all_model_configs, check_model_loaded
+    return {"models": [dict(model_name=config.model_name, loaded=check_model_loaded(config),
+                            **operation_snapshot(config.model_name)) for config in get_all_model_configs()]}
+
+
 def _resolve_model_config(model_name: str):
     """Look up a model config by name or raise a 400 listing the valid ids."""
     from ..backends import get_all_model_configs, get_model_config
@@ -65,6 +74,7 @@ def _resolve_model_config(model_name: str):
 
 
 @router.post("/models/load")
+@runtime_guard("载入模型", reject_busy=True)
 async def load_model(
     request: models.ModelLoadRequest | None = None,
     model_size: str | None = None,
@@ -87,9 +97,17 @@ async def load_model(
     if requested_name is not None:
         config = _resolve_model_config(requested_name)
         try:
-            result = get_model_load_func(config)()
-            if asyncio.iscoroutine(result):
-                await result
+            if request and request.replace_loaded:
+                from ..backends import get_tts_model_configs, check_model_loaded, unload_model_by_config
+                tts_configs = get_tts_model_configs()
+                for previous in tts_configs if any(item.model_name == config.model_name for item in tts_configs) else []:
+                    if previous.model_name != config.model_name and check_model_loaded(previous):
+                        async with model_operation(previous.model_name, "unloading"):
+                            await finish_thread(unload_model_by_config, previous)
+            async with model_operation(config.model_name, "loading"):
+                result = await finish_thread(get_model_load_func(config))
+                if asyncio.iscoroutine(result):
+                    await finish_awaitable(result)
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e)) from e
         return {"message": f"Model {config.model_name} loaded successfully"}
@@ -97,13 +115,15 @@ async def load_model(
     size = requested_size or DEFAULT_QWEN_MODEL_SIZE
     try:
         tts_model = tts.get_tts_model()
-        await tts_model.load_model_async(size)
+        async with model_operation(f"qwen-tts-{size}", "loading"):
+            await finish_awaitable(tts_model.load_model_async(size))
         return {"message": f"Model {size} loaded successfully"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.post("/models/unload")
+@runtime_guard("卸载模型", reject_busy=True)
 async def unload_model(request: models.ModelLoadRequest | None = None):
     """Unload a model from memory.
 
@@ -120,7 +140,8 @@ async def unload_model(request: models.ModelLoadRequest | None = None):
     if requested_name is not None:
         config = _resolve_model_config(requested_name)
         try:
-            was_loaded = unload_model_by_config(config)
+            async with model_operation(config.model_name, "unloading"):
+                was_loaded = await finish_thread(unload_model_by_config, config)
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e)) from e
         if not was_loaded:
@@ -128,13 +149,15 @@ async def unload_model(request: models.ModelLoadRequest | None = None):
         return {"message": f"Model {config.model_name} unloaded successfully"}
 
     try:
-        tts.unload_tts_model()
+        async with model_operation("qwen-tts-" + str(getattr(tts.get_tts_model(), "model_size", "1.7B")), "unloading"):
+            await finish_thread(tts.unload_tts_model)
         return {"message": "Model unloaded successfully"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.post("/models/{model_name}/unload")
+@runtime_guard("卸载模型", reject_busy=True)
 async def unload_model_by_name(model_name: str):
     """Unload a specific model from memory without deleting it from disk."""
     from ..backends import get_model_config, unload_model_by_config
@@ -144,7 +167,8 @@ async def unload_model_by_name(model_name: str):
         raise HTTPException(status_code=400, detail=f"Unknown model: {model_name}")
 
     try:
-        was_loaded = unload_model_by_config(config)
+        async with model_operation(config.model_name, "unloading"):
+            was_loaded = await finish_thread(unload_model_by_config, config)
         if not was_loaded:
             return {"message": f"Model {model_name} is not loaded"}
         return {"message": f"Model {model_name} unloaded successfully"}
@@ -431,6 +455,7 @@ async def get_model_status():
                     downloading=is_downloading,
                     size_mb=size_mb,
                     loaded=loaded,
+                    **operation_snapshot(config["model_name"]),
                 )
             )
         except Exception:
@@ -450,6 +475,7 @@ async def get_model_status():
                     downloading=is_downloading,
                     size_mb=None,
                     loaded=loaded,
+                    **operation_snapshot(config["model_name"]),
                 )
             )
 
@@ -457,6 +483,7 @@ async def get_model_status():
 
 
 @router.post("/models/download")
+@runtime_guard("准备下载模型", reject_busy=True)
 async def trigger_model_download(request: models.ModelDownloadRequest):
     """Trigger download of a specific model."""
     from ..backends import get_model_config, get_model_load_func
@@ -470,11 +497,13 @@ async def trigger_model_download(request: models.ModelDownloadRequest):
 
     load_func = get_model_load_func(config)
 
+    @runtime_guard("下载与载入模型")
     async def download_in_background():
         try:
-            result = load_func()
-            if asyncio.iscoroutine(result):
-                await result
+            async with model_operation(config.model_name, "loading"):
+                result = await finish_thread(load_func)
+                if asyncio.iscoroutine(result):
+                    await finish_awaitable(result)
             task_manager.complete_download(request.model_name)
         except Exception as e:
             task_manager.error_download(request.model_name, str(e))
@@ -514,6 +543,7 @@ async def cancel_model_download(request: models.ModelDownloadRequest):
 
 
 @router.delete("/models/{model_name}")
+@runtime_guard("移除模型", reject_busy=True)
 async def delete_model(model_name: str):
     """Delete a downloaded model from the HuggingFace cache."""
     from huggingface_hub import constants as hf_constants
@@ -526,7 +556,8 @@ async def delete_model(model_name: str):
     hf_repo_id = config.hf_repo_id
 
     try:
-        unload_model_by_config(config)
+        async with model_operation(model_name, "unloading"):
+            await finish_thread(unload_model_by_config, config)
 
         cache_dir = hf_constants.HF_HUB_CACHE
         repo_cache_dir = Path(cache_dir) / ("models--" + hf_repo_id.replace("/", "--"))

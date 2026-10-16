@@ -214,6 +214,7 @@ async def generate_chunked(
     crossfade_ms: int = 50,
     trim_fn=None,
     runaway_detector=None,
+    progress_callback=None,
 ) -> Tuple[np.ndarray, int]:
     """Generate audio with automatic chunking for long text.
 
@@ -245,6 +246,10 @@ async def generate_chunked(
     runaway_detector : callable | None
         Optional ``(audio, sample_rate) -> bool`` detector. When it flags
         unstable output, the affected text is split in half and retried.
+    progress_callback : callable | None
+        Called on the event loop with ``(completed_chunks, total_chunks,
+        completed_chars, total_chars)`` before inference and after each
+        successful top-level chunk (including any retries).
 
     Returns
     -------
@@ -255,13 +260,14 @@ async def generate_chunked(
         chunk_seed: int | None,
         retry_depth: int = 0,
     ) -> tuple[np.ndarray, int]:
-        chunk_audio, chunk_sr = await backend.generate(
+        from .model_runtime import finish_awaitable
+        chunk_audio, chunk_sr = await finish_awaitable(backend.generate(
             chunk_text,
             voice_prompt,
             language,
             chunk_seed,
             instruct,
-        )
+        ))
 
         if runaway_detector is not None and runaway_detector(chunk_audio, chunk_sr):
             if retry_depth >= MAX_RUNAWAY_RETRIES or len(chunk_text) <= MIN_RUNAWAY_RETRY_CHARS:
@@ -316,10 +322,16 @@ async def generate_chunked(
         return np.asarray(chunk_audio, dtype=np.float32), chunk_sr
 
     chunks = split_text_into_chunks(text, max_chunk_chars)
+    total_chars = sum(len(chunk) for chunk in chunks)
+    if progress_callback:
+        progress_callback(0, max(1, len(chunks)), 0, total_chars)
 
     if len(chunks) <= 1:
         # Short text — single-shot fast path
-        return await generate_one(text, seed)
+        result = await generate_one(text, seed)
+        if progress_callback:
+            progress_callback(1, 1, total_chars, total_chars)
+        return result
 
     # Long text — chunked generation
     logger.info(
@@ -330,6 +342,7 @@ async def generate_chunked(
     )
     audio_chunks: List[np.ndarray] = []
     sample_rate: int | None = None
+    completed_chars = 0
 
     for i, chunk_text in enumerate(chunks):
         logger.info(
@@ -349,6 +362,9 @@ async def generate_chunked(
         )
 
         audio_chunks.append(chunk_audio)
+        completed_chars += len(chunk_text)
+        if progress_callback:
+            progress_callback(i + 1, len(chunks), completed_chars, total_chars)
         if sample_rate is None:
             sample_rate = chunk_sr
 

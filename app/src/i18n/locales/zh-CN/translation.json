@@ -702,6 +702,40 @@
     }
   },
   "generation": {
+    "compatibility": {
+      "design": "VoiceDesign 根据文字描述设计声音。请先选择或创建设计声音；已有克隆声音请使用 Qwen3-TTS Base。",
+      "other": "当前声音不支持所选引擎，请在上方选择兼容的声音。",
+      "create": "通过描述创建设计声音"
+    },
+    "live": {
+      "warming": "正在预热即时朗读，可以继续编辑文字…",
+      "ready": "即时朗读已预热，可以开始生成",
+      "routingUnsupported": "指定输出设备暂不支持即时试听，请取消该选项后生成",
+      "enable": "边生成边听（测试 · CUDA · 默认输出设备）",
+      "player": "即时朗读播放器",
+      "buffering": "正在缓冲声音…",
+      "playing": "正在边生成边播放",
+      "paused": "已暂停播放，后台继续生成",
+      "finished": "朗读完成，音频已保存",
+      "failed": "即时试听中断",
+      "original": "原声试听 · 默认输出设备",
+      "pause": "暂停",
+      "resume": "继续",
+      "stop": "停止",
+      "replay": "重播已保存音频"
+    },
+    "progress": {
+      "label": "语音生成进度",
+      "queued": "等待前面的任务完成",
+      "loading_model": "正在加载模型",
+      "preparing_voice": "正在准备声音特征",
+      "generating": "正在生成语音",
+      "finalizing": "正在处理并保存音频",
+      "elapsed": "已耗时 {{time}}",
+      "remaining": "语音生成预计还需 {{time}}",
+      "estimating": "正在估算剩余时间…",
+      "overdue": "耗时超出预估，仍在生成"
+    },
     "placeholder": {
       "storyWithEffects": "为 \"{{name}}\" 生成语音… (输入 / 使用效果)",
       "story": "为 \"{{name}}\" 生成语音…",
@@ -1177,6 +1211,21 @@
     }
   },
   "models": {
+    "runtime": {
+      "checking": "正在读取模型状态",
+      "reconnect": "重新连接",
+      "label": "模型内存状态",
+      "loading": "正在载入模型",
+      "unloading": "正在卸载模型",
+      "loaded": "已载入内存",
+      "unloaded": "尚未载入内存",
+      "error": "上次模型操作失败",
+      "busy": "当前模型正在使用，请等待完成或先停止任务，再进行切换。",
+      "downloadFirst": "模型尚未下载，前往模型页下载",
+      "load": "载入并切换",
+      "unload": "卸载模型",
+      "keepsFiles": "卸载不删除已下载文件"
+    },
     "title": "模型",
     "subtitle": "下载和管理用于语音生成和转录的 AI 模型",
     "defaultName": "模型",

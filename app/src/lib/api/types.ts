@@ -88,6 +88,7 @@ export interface GenerationRequest {
   max_chunk_chars?: number;
   crossfade_ms?: number;
   normalize?: boolean;
+  stream_audio?: boolean;
   effects_chain?: EffectConfig[];
 }
 
@@ -359,7 +360,23 @@ export interface ModelStatus {
   downloading: boolean; // True if download is in progress
   size_mb?: number;
   loaded: boolean;
+  operation?: 'idle' | 'loading' | 'unloading' | 'error';
+  operation_elapsed_seconds?: number | null;
+  operation_error?: string | null;
+  runtime_busy?: boolean;
+  runtime_activity?: string | null;
 }
+
+export type ModelRuntimeStatus = Pick<
+  ModelStatus,
+  | 'model_name'
+  | 'loaded'
+  | 'operation'
+  | 'operation_elapsed_seconds'
+  | 'operation_error'
+  | 'runtime_busy'
+  | 'runtime_activity'
+>;
 
 export interface HuggingFaceModelInfo {
   id: string;
@@ -476,6 +493,7 @@ export interface AudiobookSentence {
   paragraph_index: number;
   position: number;
   generation_status?: 'loading_model' | 'generating' | 'completed' | 'failed';
+  generation_progress?: import('@/stores/generationStore').GenerationProgressData | null;
   generation_error?: string;
   duration?: number;
   audio_path?: string;
@@ -517,6 +535,7 @@ export type AudiobookSentenceStatus = Pick<
   | 'id'
   | 'generation_id'
   | 'generation_status'
+  | 'generation_progress'
   | 'generation_error'
   | 'error_category'
   | 'duration'

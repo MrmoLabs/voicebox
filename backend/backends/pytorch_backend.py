@@ -5,6 +5,10 @@ PyTorch backend implementation for TTS and STT.
 from typing import Optional, List, Tuple
 import asyncio
 import logging
+import time
+import queue
+import threading
+from dataclasses import asdict, is_dataclass
 import torch
 import numpy as np
 
@@ -36,6 +40,9 @@ class PyTorchTTSBackend:
         self.model_size = model_size
         self.device = self._get_device()
         self._current_model_size = None
+        self._load_lock = asyncio.Lock()
+        self._inference_lock = asyncio.Lock()
+        self._inference_warmed = False
 
     def _get_device(self) -> str:
         """Get the best available device."""
@@ -82,12 +89,17 @@ class PyTorchTTSBackend:
         if self.model is not None and self._current_model_size == model_size:
             return
 
-        # Unload existing model if different size requested
-        if self.model is not None and self._current_model_size != model_size:
-            self.unload_model()
-
-        # Run blocking load in thread pool
-        await asyncio.to_thread(self._load_model_sync, model_size)
+        async with self._load_lock:
+            if self.model is not None and self._current_model_size == model_size:
+                return
+            if self.model is not None:
+                self.unload_model()
+            from ..utils.model_runtime import finish_thread
+            try:
+                await finish_thread(self._load_model_sync, model_size)
+            except BaseException:
+                self.unload_model()
+                raise
 
     # Alias for compatibility
     load_model = load_model_async
@@ -96,9 +108,11 @@ class PyTorchTTSBackend:
         """Synchronous model loading."""
         model_name = f"qwen-tts-{model_size}"
         is_cached = self._is_model_cached(model_size)
+        started = time.perf_counter()
 
         with model_load_progress(model_name, is_cached):
             from qwen_tts import Qwen3TTSModel
+            logger.info("Qwen dependencies ready in %.2fs", time.perf_counter() - started)
 
             model_path = self._get_model_path(model_size)
             logger.info("Loading TTS model %s on %s...", model_size, self.device)
@@ -134,10 +148,11 @@ class PyTorchTTSBackend:
 
         self._current_model_size = model_size
         self.model_size = model_size
-        logger.info("TTS model %s loaded successfully", model_size)
+        logger.info("TTS model %s loaded successfully in %.2fs", model_size, time.perf_counter() - started)
 
     def unload_model(self):
         """Unload the model to free memory."""
+        self._inference_warmed = False
         if self.model is not None:
             del self.model
             self.model = None
@@ -168,12 +183,16 @@ class PyTorchTTSBackend:
 
         # Check cache if enabled
         if use_cache:
-            cache_key = get_cache_key(audio_path, reference_text)
+            cache_key = f"qwen-base-{self.model_size}-" + get_cache_key(audio_path, reference_text)
             cached_prompt = get_cached_voice_prompt(cache_key)
             if cached_prompt is not None:
                 # Cache stores as torch.Tensor but actual prompt is dict
                 # Convert if needed
                 if isinstance(cached_prompt, dict):
+                    if "qwen_voice_clone_prompt" in cached_prompt:
+                        from qwen_tts.inference.qwen3_tts_model import VoiceClonePromptItem
+
+                        return [VoiceClonePromptItem(**item) for item in cached_prompt["qwen_voice_clone_prompt"]], True
                     # For PyTorch backend, the dict should contain tensors, not file paths
                     # So we can safely return it
                     return cached_prompt, True
@@ -181,6 +200,8 @@ class PyTorchTTSBackend:
                     # Legacy cache format - convert to dict
                     # This shouldn't happen in practice, but handle it
                     return {"prompt": cached_prompt}, True
+                elif isinstance(cached_prompt, list):
+                    return cached_prompt, True
 
         def _create_prompt_sync():
             """Run synchronous voice prompt creation in thread pool."""
@@ -199,8 +220,13 @@ class PyTorchTTSBackend:
 
         # Cache if enabled
         if use_cache:
-            cache_key = get_cache_key(audio_path, reference_text)
-            cache_voice_prompt(cache_key, voice_prompt_items)
+            cache_key = f"qwen-base-{self.model_size}-" + get_cache_key(audio_path, reference_text)
+            # Save plain tensor dictionaries so weights_only=True can reload
+            # them across restarts without unpickling a custom Qwen class.
+            cached_items = voice_prompt_items
+            if isinstance(voice_prompt_items, list) and all(is_dataclass(item) for item in voice_prompt_items):
+                cached_items = {"qwen_voice_clone_prompt": [asdict(item) for item in voice_prompt_items]}
+            cache_voice_prompt(cache_key, cached_items)
 
         return voice_prompt_items, False
 
@@ -253,9 +279,85 @@ class PyTorchTTSBackend:
             return wavs[0], sample_rate
 
         # Run blocking inference in thread pool to avoid blocking event loop
-        audio, sample_rate = await asyncio.to_thread(_generate_sync)
+        async with self._inference_lock:
+            worker = asyncio.create_task(asyncio.to_thread(_generate_sync))
+            try:
+                audio, sample_rate = await asyncio.shield(worker)
+            finally:
+                # Cancelling the await does not stop CUDA work in the thread.
+                # Keep ownership until it exits before another request starts.
+                while not worker.done():
+                    try:
+                        await asyncio.shield(worker)
+                    except asyncio.CancelledError:
+                        continue
 
+        self._inference_warmed = True
         return audio, sample_rate
+
+    async def generate_stream(self, text, voice_prompt, language="en", seed=None, instruct=None):
+        """Yield PCM with bounded producer memory and cooperative cancellation."""
+        await self.load_model_async(None)
+        async with self._inference_lock:
+            packets = queue.Queue(maxsize=4)
+            stopped = threading.Event()
+            end = object()
+
+            def put(item):
+                while not stopped.is_set():
+                    try:
+                        packets.put(item, timeout=0.1)
+                        return
+                    except queue.Full:
+                        pass
+
+            def produce():
+                generator = None
+                try:
+                    if seed is not None:
+                        manual_seed(seed, self.device)
+                    with torch.inference_mode():
+                        generator = self.model.stream_generate_voice_clone(
+                            text=text, voice_clone_prompt=voice_prompt,
+                            language=LANGUAGE_CODE_TO_NAME.get(language, "auto"),
+                            emit_every_frames=8, decode_window_frames=80,
+                            use_optimized_decode=False,
+                        )
+                        for audio, sample_rate in generator:
+                            if stopped.is_set():
+                                break
+                            put((np.asarray(audio, dtype=np.float32).copy(), sample_rate))
+                except Exception as error:
+                    put(error)
+                finally:
+                    try:
+                        if generator is not None:
+                            generator.close()
+                    except Exception as error:
+                        put(error)
+                    finally:
+                        put(end)
+
+            worker = asyncio.create_task(asyncio.to_thread(produce))
+            try:
+                while True:
+                    try:
+                        item = await asyncio.to_thread(packets.get, True, 0.2)
+                    except queue.Empty:
+                        continue
+                    if item is end:
+                        self._inference_warmed = True
+                        break
+                    if isinstance(item, Exception):
+                        raise item
+                    yield item
+            finally:
+                stopped.set()
+                while not worker.done():
+                    try:
+                        await asyncio.shield(worker)
+                    except asyncio.CancelledError:
+                        continue
 
 
 class PyTorchSTTBackend:

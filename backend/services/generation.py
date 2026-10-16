@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import traceback
 from typing import Literal, Optional
 
@@ -59,6 +60,7 @@ async def run_generation(
     max_chunk_chars: Optional[int] = None,
     crossfade_ms: Optional[int] = None,
     version_id: Optional[str] = None,
+    stream_audio: bool = False,
 ) -> None:
     """Execute TTS inference and persist the result.
 
@@ -73,19 +75,31 @@ async def run_generation(
     )
     from ..utils.chunked_tts import generate_chunked
     from ..utils.audio import has_tts_runaway, normalize_audio, save_audio, trim_tts_output
+    from ..utils.generation_progress import generation_progress
 
     task_manager = get_task_manager()
     bg_db = next(get_db())
     tts_model = None
+    terminal_status = "failed"
+    from ..utils.model_runtime import runtime_lease
+    lease = runtime_lease("生成语音")
+    leased = False
 
     try:
+        await lease.__aenter__()
+        leased = True
         tts_model = get_tts_backend_for_engine(engine)
+        warm_model = tts_model.is_loaded() and getattr(tts_model, "_inference_warmed", True) and (
+            model_size is None or getattr(tts_model, "model_size", model_size) == model_size
+        )
+        generation_progress.stage(generation_id, "loading_model")
 
         if not tts_model.is_loaded():
             await history.update_generation_status(generation_id, "loading_model", bg_db)
 
         await load_engine_model(engine, model_size)
 
+        generation_progress.stage(generation_id, "preparing_voice")
         voice_prompt = await profiles.create_voice_prompt_for_profile(
             profile_id,
             bg_db,
@@ -94,6 +108,12 @@ async def run_generation(
         )
 
         await history.update_generation_status(generation_id, "generating", bg_db)
+        generation_progress.stage(
+            generation_id, "generating",
+            estimate_key=(engine, model_size, language, str(getattr(tts_model, "device", "unknown")),
+                          os.environ.get("VOICEBOX_TTS_OPTIMIZE", "0")),
+            learn=warm_model,
+        )
         trim_fn = trim_tts_output if engine_needs_trim(engine) else None
         runaway_detector = has_tts_runaway if engine_retries_runaway(engine) else None
 
@@ -103,17 +123,35 @@ async def run_generation(
             instruct=instruct,
             trim_fn=trim_fn,
             runaway_detector=runaway_detector,
+            progress_callback=lambda *args: generation_progress.chunks(generation_id, *args),
         )
         if max_chunk_chars is not None:
             gen_kwargs["max_chunk_chars"] = max_chunk_chars
         if crossfade_ms is not None:
             gen_kwargs["crossfade_ms"] = crossfade_ms
 
-        audio, sample_rate = await generate_chunked(tts_model, text, voice_prompt, **gen_kwargs)
+        if stream_audio:
+            from ..utils.live_audio import generate_live_audio
+
+            audio, sample_rate = await generate_live_audio(
+                tts_model, generation_id, text, voice_prompt, language=language,
+                seed=seed, instruct=instruct, crossfade_ms=crossfade_ms if crossfade_ms is not None else 50,
+                max_chunk_chars=min(max_chunk_chars or 160, 160),
+            )
+        else:
+            audio, sample_rate = await generate_chunked(tts_model, text, voice_prompt, **gen_kwargs)
+        generation_progress.stage(generation_id, "finalizing")
+        # Give ready SSE readers a chance before synchronous audio processing.
+        await asyncio.sleep(0)
 
         # --- Normalize (generate and regenerate always; retry skips) -----
         if normalize or mode == "regenerate":
-            audio = normalize_audio(audio)
+            if stream_audio:
+                from ..utils.live_audio import get_live_audio, normalize_spooled_audio
+                audio = await asyncio.to_thread(normalize_spooled_audio, audio,
+                                                get_live_audio(generation_id).path.with_suffix(".normalized.f32"))
+            else:
+                audio = normalize_audio(audio)
 
         duration = len(audio) / sample_rate
 
@@ -170,11 +208,19 @@ async def run_generation(
         )
         _notify_speak_end(generation_id, status="failed")
     else:
+        terminal_status = "completed"
         _notify_speak_end(generation_id, status="completed")
     finally:
-        task_manager.complete_generation(generation_id)
-        bg_db.close()
-        release_generation_memory(tts_model)
+        try:
+            if stream_audio:
+                from ..utils.live_audio import finish_live_audio
+                finish_live_audio(generation_id, terminal_status)
+            task_manager.complete_generation(generation_id)
+            bg_db.close()
+            release_generation_memory(tts_model)
+        finally:
+            if leased:
+                await lease.__aexit__(None, None, None)
 
 
 def _notify_speak_end(generation_id: str, *, status: str) -> None:

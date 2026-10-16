@@ -128,7 +128,10 @@ class ApiClient {
   }
 
   async createAudiobook(data: AudiobookCreate): Promise<AudiobookDetail> {
-    return this.request<AudiobookDetail>('/audiobooks', { method: 'POST', body: JSON.stringify(data) });
+    return this.request<AudiobookDetail>('/audiobooks', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
   }
 
   async getAudiobook(id: string): Promise<AudiobookDetail> {
@@ -139,48 +142,84 @@ class ApiClient {
     await this.request(`/audiobooks/${id}`, { method: 'DELETE' });
   }
 
-  async createAudiobookChapter(bookId: string, data: { title: string; source_text: string }): Promise<AudiobookChapter> {
-    return this.request<AudiobookChapter>(`/audiobooks/${bookId}/chapters`, { method: 'POST', body: JSON.stringify(data) });
+  async createAudiobookChapter(
+    bookId: string,
+    data: { title: string; source_text: string },
+  ): Promise<AudiobookChapter> {
+    return this.request<AudiobookChapter>(`/audiobooks/${bookId}/chapters`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
   }
 
   async previewAudiobookSplit(text: string): Promise<AudiobookSplitResponse> {
-    return this.request<AudiobookSplitResponse>('/audiobooks/split', { method: 'POST', body: JSON.stringify({ text }) });
+    return this.request<AudiobookSplitResponse>('/audiobooks/split', {
+      method: 'POST',
+      body: JSON.stringify({ text }),
+    });
   }
 
   async splitAudiobookChapter(chapterId: string, text: string): Promise<AudiobookChapter> {
-    return this.request<AudiobookChapter>(`/audiobooks/chapters/${chapterId}/split`, { method: 'PUT', body: JSON.stringify({ text }) });
+    return this.request<AudiobookChapter>(`/audiobooks/chapters/${chapterId}/split`, {
+      method: 'PUT',
+      body: JSON.stringify({ text }),
+    });
   }
 
-  async updateAudiobookSentence(sentenceId: string, data: { text?: string; generation_id?: string | null }): Promise<AudiobookSentence> {
-    return this.request<AudiobookSentence>(`/audiobooks/sentences/${sentenceId}`, { method: 'PATCH', body: JSON.stringify(data) });
+  async updateAudiobookSentence(
+    sentenceId: string,
+    data: { text?: string; generation_id?: string | null },
+  ): Promise<AudiobookSentence> {
+    return this.request<AudiobookSentence>(`/audiobooks/sentences/${sentenceId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    });
   }
 
-  async createAudiobookSentence(chapterId: string, data: { text: string; position?: number; paragraph_index?: number }): Promise<AudiobookSentence> {
-    return this.request<AudiobookSentence>(`/audiobooks/chapters/${chapterId}/sentences`, { method: 'POST', body: JSON.stringify(data) });
+  async createAudiobookSentence(
+    chapterId: string,
+    data: { text: string; position?: number; paragraph_index?: number },
+  ): Promise<AudiobookSentence> {
+    return this.request<AudiobookSentence>(`/audiobooks/chapters/${chapterId}/sentences`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
   }
 
-  async reorderAudiobookSentences(chapterId: string, sentenceIds: string[]): Promise<AudiobookChapter> {
+  async reorderAudiobookSentences(
+    chapterId: string,
+    sentenceIds: string[],
+  ): Promise<AudiobookChapter> {
     return this.request<AudiobookChapter>(`/audiobooks/chapters/${chapterId}/sentences/reorder`, {
       method: 'PUT',
       body: JSON.stringify({ sentence_ids: sentenceIds }),
     });
   }
 
-  async deleteAudiobookSentence(sentenceId: string): Promise<{ snapshot: import('./types').AudiobookSentenceSnapshot }> {
+  async deleteAudiobookSentence(
+    sentenceId: string,
+  ): Promise<{ snapshot: import('./types').AudiobookSentenceSnapshot }> {
     // Use an explicit action endpoint. Some packaged backend/router versions
     // exposed PATCH but dropped DELETE when merging the same path template.
     return this.request(`/audiobooks/sentences/${sentenceId}/delete`, { method: 'POST' });
   }
 
-  async restoreAudiobookSentence(chapterId: string, snapshot: import('./types').AudiobookSentenceSnapshot): Promise<AudiobookSentence> {
+  async restoreAudiobookSentence(
+    chapterId: string,
+    snapshot: import('./types').AudiobookSentenceSnapshot,
+  ): Promise<AudiobookSentence> {
     return this.request<AudiobookSentence>(`/audiobooks/chapters/${chapterId}/sentences/restore`, {
-      method: 'POST', body: JSON.stringify(snapshot),
+      method: 'POST',
+      body: JSON.stringify(snapshot),
     });
   }
 
-  async deleteAudiobookSentences(sentenceIds: string[]): Promise<{ snapshots: import('./types').AudiobookSentenceSnapshot[] }> {
+  async deleteAudiobookSentences(
+    sentenceIds: string[],
+  ): Promise<{ snapshots: import('./types').AudiobookSentenceSnapshot[] }> {
     return this.request('/audiobooks/sentences/batch-delete', {
-      method: 'POST', body: JSON.stringify({ sentence_ids: sentenceIds }),
+      method: 'POST',
+      body: JSON.stringify({ sentence_ids: sentenceIds }),
     });
   }
 
@@ -188,29 +227,49 @@ class ApiClient {
     await this.request(`/audiobooks/sentences/${sentenceId}/audio/delete`, { method: 'POST' });
   }
 
-  async deleteObsoleteAudiobookSentenceAudio(sentenceId: string, generationId: string): Promise<void> {
-    await this.request(`/audiobooks/sentences/${sentenceId}/obsolete-audio/${generationId}/delete`, { method: 'POST' });
+  async deleteObsoleteAudiobookSentenceAudio(
+    sentenceId: string,
+    generationId: string,
+  ): Promise<void> {
+    await this.request(
+      `/audiobooks/sentences/${sentenceId}/obsolete-audio/${generationId}/delete`,
+      { method: 'POST' },
+    );
   }
 
   async permanentlyDeleteAudiobookSentence(deletionId: string): Promise<void> {
     await this.request(`/audiobooks/deleted-sentences/${deletionId}/delete`, { method: 'POST' });
   }
 
-  async selectAudiobookSentenceAudio(sentenceId: string, generationId: string): Promise<AudiobookSentence> {
-    return this.request<AudiobookSentence>(`/audiobooks/sentences/${sentenceId}/audio/${generationId}/select`, { method: 'POST' });
+  async selectAudiobookSentenceAudio(
+    sentenceId: string,
+    generationId: string,
+  ): Promise<AudiobookSentence> {
+    return this.request<AudiobookSentence>(
+      `/audiobooks/sentences/${sentenceId}/audio/${generationId}/select`,
+      { method: 'POST' },
+    );
   }
 
   async deleteAudiobookSentenceAudioTake(sentenceId: string, generationId: string): Promise<void> {
-    await this.request(`/audiobooks/sentences/${sentenceId}/audio/${generationId}/delete`, { method: 'POST' });
+    await this.request(`/audiobooks/sentences/${sentenceId}/audio/${generationId}/delete`, {
+      method: 'POST',
+    });
   }
 
-  async listDeletedAudiobookSentences(chapterId: string): Promise<import('./types').AudiobookDeletedSentence[]> {
+  async listDeletedAudiobookSentences(
+    chapterId: string,
+  ): Promise<import('./types').AudiobookDeletedSentence[]> {
     return this.request(`/audiobooks/chapters/${chapterId}/deleted-sentences`);
   }
 
-  async restoreAudiobookSentences(chapterId: string, deletionIds: string[]): Promise<AudiobookSentence[]> {
+  async restoreAudiobookSentences(
+    chapterId: string,
+    deletionIds: string[],
+  ): Promise<AudiobookSentence[]> {
     return this.request(`/audiobooks/chapters/${chapterId}/sentences/batch-restore`, {
-      method: 'POST', body: JSON.stringify({ deletion_ids: deletionIds }),
+      method: 'POST',
+      body: JSON.stringify({ deletion_ids: deletionIds }),
     });
   }
 
@@ -234,7 +293,8 @@ class ApiClient {
         if (attempt) await new Promise((resolve) => window.setTimeout(resolve, 1000 * attempt));
         await this.getHealth();
         return await this.request(endpoint, {
-          method: 'POST', body: JSON.stringify(data),
+          method: 'POST',
+          body: JSON.stringify(data),
         });
       } catch (error) {
         lastError = error;
@@ -254,22 +314,30 @@ class ApiClient {
     );
   }
 
-  async getActiveAudiobookGenerationPlan(bookId: string): Promise<import('./types').AudiobookGenerationPlan | null> {
+  async getActiveAudiobookGenerationPlan(
+    bookId: string,
+  ): Promise<import('./types').AudiobookGenerationPlan | null> {
     return this.request(`/audiobooks/${bookId}/generation-plans/active`);
   }
 
-  async getAudiobookSentenceStatuses(chapterId: string): Promise<import('./types').AudiobookSentenceStatus[]> {
+  async getAudiobookSentenceStatuses(
+    chapterId: string,
+  ): Promise<import('./types').AudiobookSentenceStatus[]> {
     return this.request(`/audiobooks/chapters/${chapterId}/sentence-statuses`);
   }
 
   async exportAudiobookChapter(chapterId: string, pauseMs: number): Promise<Blob> {
-    const response = await fetch(`${this.getBaseUrl()}/audiobooks/chapters/${chapterId}/export-audio?pause_ms=${pauseMs}`);
+    const response = await fetch(
+      `${this.getBaseUrl()}/audiobooks/chapters/${chapterId}/export-audio?pause_ms=${pauseMs}`,
+    );
     if (!response.ok) throw new Error(await response.text());
     return response.blob();
   }
 
   async cancelAudiobookGeneration(bookId: string): Promise<AudiobookCancelResponse> {
-    return this.request<AudiobookCancelResponse>(`/audiobooks/${bookId}/cancel-generation`, { method: 'POST' });
+    return this.request<AudiobookCancelResponse>(`/audiobooks/${bookId}/cancel-generation`, {
+      method: 'POST',
+    });
   }
 
   async getProfile(profileId: string): Promise<VoiceProfileResponse> {
@@ -573,6 +641,13 @@ class ApiClient {
   }
 
   // Generation status SSE
+  async warmLivePreview(profileId: string, modelSize: string): Promise<{ ready: boolean }> {
+    return this.request(
+      `/profiles/${profileId}/live-warmup?model_size=${encodeURIComponent(modelSize)}`,
+      { method: 'POST' },
+    );
+  }
+
   getGenerationStatusUrl(generationId: string): string {
     return `${this.getBaseUrl()}/generate/${generationId}/status`;
   }
@@ -770,6 +845,17 @@ class ApiClient {
     return this.request<{ message: string }>(`/models/${modelName}/unload`, {
       method: 'POST',
     });
+  }
+
+  async loadModel(modelName: string): Promise<{ message: string }> {
+    return this.request('/models/load', {
+      method: 'POST',
+      body: JSON.stringify({ model_name: modelName, replace_loaded: true }),
+    });
+  }
+
+  async getModelRuntime(): Promise<{ models: import('./types').ModelRuntimeStatus[] }> {
+    return this.request('/models/runtime');
   }
 
   async cancelDownload(modelName: string): Promise<{ message: string }> {

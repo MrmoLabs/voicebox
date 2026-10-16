@@ -5,6 +5,7 @@ Eliminates duplication of cache checking, device detection,
 voice prompt combination, and model loading progress tracking.
 """
 
+import asyncio
 import logging
 import os
 import platform
@@ -276,19 +277,24 @@ async def combine_voice_prompts(
         reference_texts: Corresponding transcripts.
         sample_rate: If set, resample audio to this rate during loading.
     """
-    combined_audio = []
+    def combine_sync():
+        combined_audio = []
 
-    for path in audio_paths:
-        kwargs = {"sample_rate": sample_rate} if sample_rate else {}
-        audio, _sr = load_audio(path, **kwargs)
-        audio = normalize_audio(audio)
-        combined_audio.append(audio)
+        for path in audio_paths:
+            kwargs = {"sample_rate": sample_rate} if sample_rate else {}
+            audio, _sr = load_audio(path, **kwargs)
+            audio = normalize_audio(audio)
+            combined_audio.append(audio)
 
-    mixed = np.concatenate(combined_audio)
-    mixed = normalize_audio(mixed)
-    combined_text = " ".join(reference_texts)
+        mixed = np.concatenate(combined_audio)
+        mixed = normalize_audio(mixed)
+        combined_text = " ".join(reference_texts)
 
-    return mixed, combined_text
+        return mixed, combined_text
+
+    # Audio decoding/resampling can take seconds on a cold librosa import.
+    # Keep status/SSE and other requests responsive while preparing a voice.
+    return await asyncio.to_thread(combine_sync)
 
 
 @contextmanager

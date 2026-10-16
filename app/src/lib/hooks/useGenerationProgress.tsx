@@ -5,8 +5,9 @@ import { useToast } from '@/components/ui/use-toast';
 import { apiClient } from '@/lib/api/client';
 import { useGenerationSettings } from '@/lib/hooks/useSettings';
 import { condenseError } from '@/lib/utils/errorText';
-import { useGenerationStore } from '@/stores/generationStore';
+import { type GenerationProgressData, useGenerationStore } from '@/stores/generationStore';
 import { usePlayerStore } from '@/stores/playerStore';
+import { useLivePlaybackStore } from '@/stores/livePlaybackStore';
 
 interface GenerationStatusEvent {
   id: string;
@@ -14,6 +15,7 @@ interface GenerationStatusEvent {
   duration?: number;
   error?: string;
   source?: string;
+  progress?: GenerationProgressData | null;
 }
 
 // Agent-initiated generations are played by the floating pill, not the
@@ -77,6 +79,9 @@ export function useGenerationProgress() {
       source.onmessage = (event) => {
         try {
           const data: GenerationStatusEvent = JSON.parse(event.data);
+          if (data.progress) {
+            useGenerationStore.getState().setProgress(id, data.progress);
+          }
 
           if (data.status === 'completed') {
             source.close();
@@ -121,7 +126,8 @@ export function useGenerationProgress() {
             // Skip agent-initiated sources — the floating pill window
             // plays those itself.
             const suppressAutoplay = data.source ? NON_AUTOPLAY_SOURCES.has(data.source) : false;
-            if (autoplayRef.current && !isPlayingRef.current && !suppressAutoplay) {
+            const wasLive = useLivePlaybackStore.getState().handledIds.has(id);
+            if (autoplayRef.current && !isPlayingRef.current && !suppressAutoplay && !wasLive) {
               const genAudioUrl = apiClient.getAudioUrl(id);
               setAudioWithAutoPlay(genAudioUrl, id, '', '');
             }
@@ -176,11 +182,8 @@ export function useGenerationProgress() {
       };
 
       source.onerror = () => {
-        // SSE connection dropped — clean up and refresh history so any
-        // completed/failed generation still appears in the list
-        source.close();
-        currentSources.delete(id);
-        removePendingGeneration(id);
+        // EventSource reconnects automatically. Keep tracking the task and its
+        // deferred story addition across transient connection interruptions.
         queryClient.refetchQueries({ queryKey: ['history'] });
       };
 

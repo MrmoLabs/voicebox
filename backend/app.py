@@ -442,6 +442,23 @@ async def _run_startup(application: FastAPI) -> None:
     except Exception as e:
         logger.warning("Could not create HuggingFace cache directory: %s", e)
 
+    if os.environ.get("VOICEBOX_BACKEND_VARIANT") == "cuda":
+        # Import the Qwen dependencies while the user chooses a voice or edits
+        # text. This does not download or load weights, and stays off the event
+        # loop so the UI remains usable during a cold Python import.
+        async def warm_qwen_dependencies():
+            import importlib
+            import time
+
+            started = time.perf_counter()
+            try:
+                await asyncio.to_thread(importlib.import_module, "qwen_tts")
+                logger.info("Qwen dependencies warmed in %.2fs", time.perf_counter() - started)
+            except Exception:
+                logger.exception("Qwen dependency warmup failed; model load will retry")
+
+        create_background_task(warm_qwen_dependencies())
+
     logger.info("Ready")
 
 

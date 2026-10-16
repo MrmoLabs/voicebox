@@ -36,14 +36,33 @@ export function AudiobookPlayer({
   onRateChange,
 }: AudiobookPlayerProps) {
   return (
-    <div className="fixed bottom-5 left-28 right-8 h-16 rounded-2xl border bg-card/95 backdrop-blur shadow-xl z-40 flex items-center gap-4 px-5">
-      <Button size="icon" variant="ghost" onClick={onPrevious} disabled={index <= 0}>
+    <div className="audiobook-player absolute bottom-4 left-0 right-0 min-w-0 rounded-2xl border bg-card/95 backdrop-blur shadow-xl z-40 flex items-center gap-2 p-3">
+      <Button
+        size="icon"
+        variant="ghost"
+        className="shrink-0"
+        aria-label="上一句"
+        onClick={onPrevious}
+        disabled={index <= 0}
+      >
         <ChevronLeft />
       </Button>
-      <Button size="icon" onClick={onToggle}>
+      <Button
+        size="icon"
+        className="shrink-0"
+        aria-label={isPlaying ? '暂停' : '播放'}
+        onClick={onToggle}
+      >
         {isPlaying ? <Pause /> : <Play />}
       </Button>
-      <Button size="icon" variant="ghost" onClick={onNext} disabled={index >= total - 1}>
+      <Button
+        size="icon"
+        variant="ghost"
+        className="shrink-0"
+        aria-label="下一句"
+        onClick={onNext}
+        disabled={index >= total - 1}
+      >
         <ChevronRight />
       </Button>
       <div className="min-w-0 flex-1">
@@ -59,7 +78,7 @@ export function AudiobookPlayer({
           if (audioRef.current) audioRef.current.playbackRate = Number(value);
         }}
       >
-        <SelectTrigger className="w-24">
+        <SelectTrigger className="w-20 shrink-0" aria-label="播放速度">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>

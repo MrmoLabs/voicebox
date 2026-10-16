@@ -19,6 +19,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { AudioBars } from '@/components/AudioBars';
+import { GenerationProgress } from '@/components/Generation/GenerationProgress';
 import { EffectsChainEditor } from '@/components/Effects/EffectsChainEditor';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -746,9 +747,7 @@ export function HistoryTable() {
                       </div>
                       <div className="text-xs text-muted-foreground">
                         {isInProgress ? (
-                          <span className="text-accent">
-                            {gen.status === 'loading_model' ? 'Loading model...' : 'Generating...'}
-                          </span>
+                          <GenerationProgress id={gen.id} loadingModel={gen.status === 'loading_model'} />
                         ) : (
                           formatDate(gen.created_at)
                         )}

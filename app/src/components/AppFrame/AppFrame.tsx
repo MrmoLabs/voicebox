@@ -2,6 +2,7 @@ import { useRouterState } from '@tanstack/react-router';
 import { TitleBarDragRegion } from '@/components/TitleBarDragRegion';
 import { AudioKeepAlive } from '@/components/AudioPlayer/AudioKeepAlive';
 import { AudioPlayer } from '@/components/AudioPlayer/AudioPlayer';
+import { LiveSpeechPlayer } from '@/components/AudioPlayer/LiveSpeechPlayer';
 import { StoryTrackEditor } from '@/components/StoriesTab/StoryTrackEditor';
 import { TOP_SAFE_AREA_PADDING } from '@/lib/constants/ui';
 import { cn } from '@/lib/utils/cn';
@@ -34,6 +35,7 @@ export function AppFrame({ children }: AppFrameProps) {
       ) : (
         <AudioPlayer />
       )}
+      <LiveSpeechPlayer />
     </div>
   );
 }

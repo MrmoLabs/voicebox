@@ -4,6 +4,7 @@ import asyncio
 import logging
 import uuid
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
@@ -16,6 +17,7 @@ from ..services.generation import release_generation_memory, run_generation
 from ..services.task_queue import cancel_generation as cancel_generation_job, enqueue_generation
 from ..utils.audio import load_audio
 from ..utils.tasks import get_task_manager
+from ..utils.model_runtime import runtime_guard
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +77,19 @@ async def generate_speech(
         raise HTTPException(status_code=400, detail=str(e))
 
     model_size = (data.model_size or "1.7B") if engine_has_model_sizes(engine) else None
+    if data.stream_audio:
+        from ..backends import get_tts_backend_for_engine
+        backend = get_tts_backend_for_engine(engine)
+        if engine != "qwen" or not str(getattr(backend, "device", "")).startswith("cuda"):
+            raise HTTPException(status_code=400, detail="Live preview currently requires CUDA Qwen Base")
+        effects = data.effects_chain if data.effects_chain is not None else profile.effects_chain
+        if effects and any(e.enabled if hasattr(e, "enabled") else e.get("enabled", True) for e in effects):
+            raise HTTPException(status_code=400, detail="Live preview currently supports original voice without effects")
+        from ..services import channels
+        assigned = await channels.get_profile_channels(data.profile_id, db)
+        outputs = await channels.list_channels(db) if assigned else []
+        if any(channel.id in assigned and not channel.is_default and channel.device_ids for channel in outputs):
+            raise HTTPException(status_code=400, detail="Live preview currently requires the default output device")
 
     text = data.text
     source = data.source or "manual"
@@ -123,6 +138,10 @@ async def generate_speech(
             except Exception:
                 pass
 
+    if data.stream_audio:
+        from ..utils.live_audio import create_live_audio
+        create_live_audio(generation_id)
+
     enqueue_generation(
         generation_id,
         run_generation(
@@ -139,10 +158,74 @@ async def generate_speech(
             mode="generate",
             max_chunk_chars=data.max_chunk_chars,
             crossfade_ms=data.crossfade_ms,
+            stream_audio=data.stream_audio,
         )
     )
 
     return generation
+
+
+@router.post("/profiles/{profile_id}/live-warmup")
+async def warm_live_preview(profile_id: str, model_size: Literal["1.7B", "0.6B"] = "1.7B",
+                            db: Session = Depends(get_db)):
+    """Warm real PCM inference through the serial worker; no history/audio playback."""
+    from ..backends import get_tts_backend_for_engine, load_engine_model
+
+    profile = await profiles.get_profile(profile_id, db)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    try:
+        profiles.validate_profile_engine(profile, "qwen")
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    backend = get_tts_backend_for_engine("qwen")
+    if not str(getattr(backend, "device", "")).startswith("cuda"):
+        raise HTTPException(status_code=400, detail="Live preview currently requires CUDA Qwen Base")
+    result = asyncio.get_running_loop().create_future()
+
+    @runtime_guard("预热语音")
+    async def warm():
+        warm_db = None
+        try:
+            warm_db = next(get_db())
+            await load_engine_model("qwen", model_size)
+            prompt = await profiles.create_voice_prompt_for_profile(profile_id, warm_db, engine="qwen")
+            stream = backend.generate_stream("语音预热测试。", prompt, profile.language, 42)
+            try:
+                async for _ in stream:
+                    pass
+            finally:
+                await stream.aclose()
+            if not result.done():
+                result.set_result({"ready": True, "model_size": model_size})
+        except BaseException as error:
+            if not result.done():
+                result.set_exception(error)
+        finally:
+            if warm_db is not None:
+                warm_db.close()
+
+    enqueue_generation(f"live-warmup-{uuid.uuid4()}", warm())
+    try:
+        return await asyncio.shield(result)
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=str(error)) from error
+
+
+@router.get("/generate/{generation_id}/live")
+async def get_live_preview(generation_id: str, from_sample: int = 0, db: Session = Depends(get_db)):
+    """Read bounded PCM packets from a running or recently completed job."""
+    from ..utils.live_audio import get_live_audio
+
+    if not db.query(DBGeneration).filter_by(id=generation_id).first():
+        raise HTTPException(status_code=404, detail="Generation not found")
+    state = get_live_audio(generation_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail="Live preview unavailable; use the saved audio when ready")
+    if from_sample < 0 or from_sample > state.samples:
+        raise HTTPException(status_code=400, detail="Invalid sample offset")
+    return StreamingResponse(state.packets(from_sample), media_type="application/octet-stream",
+                             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
 
 @router.post("/generate/{generation_id}/retry", response_model=models.GenerationResponse)
@@ -250,6 +333,8 @@ async def cancel_generation(generation_id: str, db: Session = Depends(get_db)):
         # exception handler). Fail the row here so the user can move on.
         task_manager = get_task_manager()
         task_manager.complete_generation(generation_id)
+        from ..utils.live_audio import finish_live_audio
+        finish_live_audio(generation_id, "failed")
         await history.update_generation_status(
             generation_id=generation_id,
             status="failed",
@@ -259,6 +344,8 @@ async def cancel_generation(generation_id: str, db: Session = Depends(get_db)):
         return {"message": "Orphaned generation cleared"}
 
     if cancellation_state == "queued":
+        from ..utils.live_audio import finish_live_audio
+        finish_live_audio(generation_id, "cancelled")
         task_manager = get_task_manager()
         task_manager.complete_generation(generation_id)
         await history.update_generation_status(
@@ -295,6 +382,9 @@ async def get_generation_status(generation_id: str, db: Session = Depends(get_db
                     # autoplay — the floating pill plays those directly.
                     "source": gen.source,
                 }
+                from ..utils.generation_progress import generation_progress
+
+                payload["progress"] = generation_progress.snapshot(generation_id)
                 yield f"data: {json.dumps(payload)}\n\n"
 
                 if (gen.status or "completed") in ("completed", "failed"):
@@ -316,6 +406,7 @@ async def get_generation_status(generation_id: str, db: Session = Depends(get_db
 
 
 @router.post("/generate/stream")
+@runtime_guard("生成语音")
 async def stream_speech(
     data: models.GenerationRequest,
     db: Session = Depends(get_db),

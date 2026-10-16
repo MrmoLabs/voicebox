@@ -18,12 +18,14 @@ import { ProfileList } from '@/components/VoiceProfiles/ProfileList';
 import { useImportProfile } from '@/lib/hooks/useProfiles';
 import { cn } from '@/lib/utils/cn';
 import { usePlayerStore } from '@/stores/playerStore';
+import { useLivePlaybackStore } from '@/stores/livePlaybackStore';
 import { useUIStore } from '@/stores/uiStore';
 
 export function MainEditor() {
   const { t } = useTranslation();
   const audioUrl = usePlayerStore((state) => state.audioUrl);
-  const isPlayerVisible = !!audioUrl;
+  const liveId = useLivePlaybackStore((state) => state.id);
+  const isPlayerVisible = !!audioUrl || !!liveId;
   const scrollRef = useRef<HTMLDivElement>(null);
   const setDialogOpen = useUIStore((state) => state.setProfileDialogOpen);
   const importProfile = useImportProfile();
@@ -121,7 +123,7 @@ export function MainEditor() {
         <HistoryTable />
       </div>
 
-      <FloatingGenerateBox isPlayerOpen={!!audioUrl} />
+      <FloatingGenerateBox isPlayerOpen={isPlayerVisible} />
 
       <Dialog open={importDialogOpen} onOpenChange={setImportDialogOpen}>
         <DialogContent>

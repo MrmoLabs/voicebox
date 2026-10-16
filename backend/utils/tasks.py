@@ -52,6 +52,9 @@ class TaskManager:
     
     def start_generation(self, task_id: str, profile_id: str, text: str) -> None:
         """Mark a generation as started."""
+        from .generation_progress import generation_progress
+
+        generation_progress.start(task_id)
         text_preview = text[:50] + "..." if len(text) > 50 else text
         self._active_generations[task_id] = GenerationTask(
             task_id=task_id,
@@ -61,6 +64,9 @@ class TaskManager:
     
     def complete_generation(self, task_id: str) -> None:
         """Mark a generation as complete."""
+        from .generation_progress import generation_progress
+
+        generation_progress.finish(task_id)
         if task_id in self._active_generations:
             del self._active_generations[task_id]
     
@@ -91,6 +97,9 @@ class TaskManager:
 
     def clear_all(self) -> None:
         """Clear all download and generation tasks."""
+        from .generation_progress import generation_progress
+
+        generation_progress.active.clear()
         self._active_downloads.clear()
         self._active_generations.clear()
 

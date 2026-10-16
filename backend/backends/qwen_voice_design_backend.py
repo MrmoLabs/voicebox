@@ -29,6 +29,8 @@ from .base import (
     combine_voice_prompts as _combine_voice_prompts,
     model_load_progress,
 )
+from ..utils.hf_offline_patch import force_offline_if_cached
+from ..utils.model_runtime import finish_thread
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +54,7 @@ class QwenVoiceDesignBackend:
         self.model_size = model_size
         self.device = self._get_device()
         self._current_model_size: Optional[str] = None
+        self._inference_warmed = False
         # Without this, two concurrent generations can both see model is None
         # and each load the 3.5 GB checkpoint. Same pattern as the Chatterbox
         # and TADA backends.
@@ -88,7 +91,11 @@ class QwenVoiceDesignBackend:
             if self.model is not None and self._current_model_size != model_size:
                 self.unload_model()
 
-            await asyncio.to_thread(self._load_model_sync, model_size)
+            try:
+                await finish_thread(self._load_model_sync, model_size)
+            except BaseException:
+                self.unload_model()
+                raise
 
     # Alias for compatibility with the TTSBackend protocol
     load_model = load_model_async
@@ -111,24 +118,21 @@ class QwenVoiceDesignBackend:
             model_path = self._get_model_path(model_size)
             logger.info("Loading Qwen VoiceDesign %s on %s...", model_size, self.device)
 
+            from huggingface_hub import constants as hf_constants
+            kwargs = dict(cache_dir=hf_constants.HF_HUB_CACHE, local_files_only=is_cached)
             if self.device == "cpu":
-                self.model = Qwen3TTSModel.from_pretrained(
-                    model_path,
-                    torch_dtype=torch.float32,
-                    low_cpu_mem_usage=False,
-                )
+                kwargs.update(torch_dtype=torch.float32, low_cpu_mem_usage=False)
             else:
-                self.model = Qwen3TTSModel.from_pretrained(
-                    model_path,
-                    device_map=self.device,
-                    torch_dtype=torch.bfloat16,
-                )
+                kwargs.update(device_map=self.device, torch_dtype=torch.bfloat16)
+            with force_offline_if_cached(is_cached, model_name):
+                self.model = Qwen3TTSModel.from_pretrained(model_path, **kwargs)
 
         self._current_model_size = model_size
         self.model_size = model_size
         logger.info("Qwen VoiceDesign %s loaded successfully", model_size)
 
     def unload_model(self) -> None:
+        self._inference_warmed = False
         if self.model is not None:
             del self.model
             self.model = None
@@ -220,5 +224,6 @@ class QwenVoiceDesignBackend:
                 )
             return wavs[0], sample_rate
 
-        audio, sample_rate = await asyncio.to_thread(_generate_sync)
+        audio, sample_rate = await finish_thread(_generate_sync)
+        self._inference_warmed = True
         return audio, sample_rate

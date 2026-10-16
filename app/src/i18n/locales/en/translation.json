@@ -702,6 +702,40 @@
     }
   },
   "generation": {
+    "compatibility": {
+      "design": "VoiceDesign creates a voice from a description. Select or create a designed voice; recordings require Qwen3-TTS Base.",
+      "other": "This voice does not support the selected engine. Select a compatible voice above.",
+      "create": "Create a designed voice"
+    },
+    "live": {
+      "warming": "Warming live speech… You can keep editing.",
+      "ready": "Live preview warmed and ready",
+      "routingUnsupported": "Live preview is not yet available for assigned output devices",
+      "enable": "Play while generating (test · CUDA · default output)",
+      "player": "Live speech player",
+      "buffering": "Buffering speech…",
+      "playing": "Playing while generating",
+      "paused": "Playback paused; generation continues",
+      "finished": "Playback finished; audio saved",
+      "failed": "Live preview interrupted",
+      "original": "Original voice preview · default output",
+      "pause": "Pause",
+      "resume": "Resume",
+      "stop": "Stop",
+      "replay": "Replay saved audio"
+    },
+    "progress": {
+      "label": "Generation progress",
+      "queued": "Waiting in queue",
+      "loading_model": "Loading model",
+      "preparing_voice": "Preparing voice",
+      "generating": "Generating speech",
+      "finalizing": "Processing and saving audio",
+      "elapsed": "Elapsed {{time}}",
+      "remaining": "Speech: about {{time}} left",
+      "estimating": "Estimating remaining time…",
+      "overdue": "Taking longer than estimated"
+    },
     "placeholder": {
       "storyWithEffects": "Generate speech for \"{{name}}\"… (type / for effects)",
       "story": "Generate speech for \"{{name}}\"…",
@@ -1226,6 +1260,21 @@
     }
   },
   "models": {
+    "runtime": {
+      "checking": "Reading model state",
+      "reconnect": "Reconnect",
+      "label": "Model memory state",
+      "loading": "Loading model",
+      "unloading": "Unloading model",
+      "loaded": "Loaded in memory",
+      "unloaded": "Not loaded in memory",
+      "error": "Last model operation failed",
+      "busy": "Model is busy; finish or stop the current task before switching.",
+      "downloadFirst": "Download this model from Models first",
+      "load": "Load and switch",
+      "unload": "Unload",
+      "keepsFiles": "Unloading keeps downloaded files"
+    },
     "title": "Models",
     "subtitle": "Download and manage AI models for voice generation and transcription",
     "defaultName": "Model",

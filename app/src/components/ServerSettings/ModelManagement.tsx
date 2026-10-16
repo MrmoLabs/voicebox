@@ -14,7 +14,6 @@ import {
   RotateCcw,
   Scale,
   Trash2,
-  Unplug,
   X,
 } from 'lucide-react';
 import { useCallback, useMemo, useState } from 'react';
@@ -43,6 +42,8 @@ import { useToast } from '@/components/ui/use-toast';
 import { apiClient } from '@/lib/api/client';
 import type { ActiveDownloadTask, HuggingFaceModelInfo, ModelStatus } from '@/lib/api/types';
 import { useModelDownloadToast } from '@/lib/hooks/useModelDownloadToast';
+import { useModelRuntime } from '@/lib/hooks/useModelRuntime';
+import { ModelRuntimeControl } from '@/components/Generation/ModelRuntimeControl';
 import { usePlatform } from '@/platform/PlatformContext';
 import { useServerStore } from '@/stores/serverStore';
 
@@ -155,7 +156,7 @@ export function ModelManagement() {
   const [selectedModel, setSelectedModel] = useState<ModelStatus | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
 
-  const { data: modelStatus, isLoading } = useQuery({
+  const { data: downloadStatus, isLoading } = useQuery({
     queryKey: ['modelStatus'],
     queryFn: async () => {
       const result = await apiClient.getModelStatus();
@@ -163,6 +164,13 @@ export function ModelManagement() {
     },
     refetchInterval: 5000,
   });
+  const runtime = useModelRuntime();
+  const modelStatus = downloadStatus && {
+    models: downloadStatus.models.map((model) => ({
+      ...model,
+      ...runtime.data?.models.find((item) => item.model_name === model.model_name),
+    })),
+  };
 
   const { data: cacheDir } = useQuery({
     queryKey: ['modelsCacheDir'],
@@ -369,27 +377,6 @@ export function ModelManagement() {
     },
   });
 
-  const unloadMutation = useMutation({
-    mutationFn: async (modelName: string) => {
-      return await apiClient.unloadModel(modelName);
-    },
-    onSuccess: async (_data, modelName) => {
-      toast({
-        title: t('models.toast.unloaded'),
-        description: t('models.toast.unloadedDescription', { name: modelName }),
-      });
-      await queryClient.invalidateQueries({ queryKey: ['modelStatus'], refetchType: 'all' });
-      await queryClient.refetchQueries({ queryKey: ['modelStatus'] });
-    },
-    onError: (error: Error) => {
-      toast({
-        title: t('models.toast.unloadFailed'),
-        description: error.message,
-        variant: 'destructive',
-      });
-    },
-  });
-
   const formatSize = (sizeMb?: number): string => {
     if (!sizeMb) return t('models.unknownSize');
     if (sizeMb < 1024) return `${sizeMb.toFixed(1)} MB`;
@@ -570,6 +557,17 @@ export function ModelManagement() {
                       {/* Name + inline progress */}
                       <div className="flex-1 min-w-0">
                         <span className="text-sm font-medium">{model.display_name}</span>
+                        {(model.operation === 'loading' || model.operation === 'unloading') && (
+                          <div className="mt-1 text-xs text-muted-foreground" role="status">
+                            {t(`models.runtime.${model.operation}`)} ·{' '}
+                            {Math.ceil(model.operation_elapsed_seconds || 0)}s
+                          </div>
+                        )}
+                        {model.operation_error && (
+                          <div className="mt-1 text-xs text-destructive line-clamp-2">
+                            {model.operation_error}
+                          </div>
+                        )}
                         {isDownloading &&
                           (() => {
                             const dl = downloadProgressMap.get(model.model_name);
@@ -873,24 +871,9 @@ export function ModelManagement() {
                     </>
                   ) : freshSelectedModel.downloaded ? (
                     <div className="flex gap-2 flex-1">
-                      {freshSelectedModel.loaded && (
-                        <Button
-                          size="sm"
-                          onClick={() => unloadMutation.mutate(freshSelectedModel.model_name)}
-                          variant="outline"
-                          disabled={unloadMutation.isPending}
-                          className="flex-1"
-                        >
-                          {unloadMutation.isPending ? (
-                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                          ) : (
-                            <Unplug className="h-4 w-4 mr-2" />
-                          )}
-                          {unloadMutation.isPending
-                            ? t('models.actions.unloading')
-                            : t('models.actions.unload')}
-                        </Button>
-                      )}
+                      <div className="flex-1">
+                        <ModelRuntimeControl modelName={freshSelectedModel.model_name} />
+                      </div>
                       <Button
                         size="sm"
                         onClick={() => {
@@ -902,7 +885,7 @@ export function ModelManagement() {
                           setDeleteDialogOpen(true);
                         }}
                         variant="outline"
-                        disabled={freshSelectedModel.loaded}
+                        disabled={freshSelectedModel.loaded || freshSelectedModel.runtime_busy}
                         title={
                           freshSelectedModel.loaded
                             ? t('models.actions.unloadFirst')

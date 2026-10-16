@@ -4,8 +4,11 @@ import { useForm } from 'react-hook-form';
 import * as z from 'zod';
 import { useToast } from '@/components/ui/use-toast';
 import { apiClient } from '@/lib/api/client';
+import { livePlayback } from '@/lib/audio/livePlayback';
+import { useLivePlaybackStore } from '@/stores/livePlaybackStore';
 import type { EffectConfig } from '@/lib/api/types';
 import { engineSupportsInstruct } from '@/lib/constants/engines';
+import { isProfileCompatibleWithEngine } from '@/lib/constants/voiceCompatibility';
 import { LANGUAGE_CODES, type LanguageCode } from '@/lib/constants/languages';
 import { useGeneration } from '@/lib/hooks/useGeneration';
 import { useModelDownloadToast } from '@/lib/hooks/useModelDownloadToast';
@@ -41,6 +44,7 @@ interface UseGenerationFormOptions {
   onSuccess?: (generationId: string) => void;
   defaultValues?: Partial<GenerationFormValues>;
   getEffectsChain?: () => EffectConfig[] | undefined;
+  livePreview?: boolean;
 }
 
 export function useGenerationForm(options: UseGenerationFormOptions = {}) {
@@ -90,6 +94,22 @@ export function useGenerationForm(options: UseGenerationFormOptions = {}) {
 
     try {
       const engine = data.engine || 'qwen';
+      const profile = await apiClient.getProfile(selectedProfileId);
+      if (!isProfileCompatibleWithEngine(profile, engine)) {
+        throw new Error(
+          engine === 'qwen_voice_design'
+            ? 'VoiceDesign 需要文字描述创建的设计声音。请先创建或选择设计声音；克隆声音请使用 Qwen3-TTS Base。'
+            : '当前声音与所选引擎不兼容，请选择支持该引擎的声音。',
+        );
+      }
+      if (options.livePreview) {
+        const live = useLivePlaybackStore.getState();
+        if (live.id && !['finished', 'failed'].includes(live.status)) {
+          throw new Error('Please stop the current live preview before starting another');
+        }
+        // Prepare from the submit gesture, before awaiting model checks/HTTP.
+        await livePlayback.prepare();
+      }
       const modelName =
         engine === 'luxtts'
           ? 'luxtts'
@@ -166,8 +186,10 @@ export function useGenerationForm(options: UseGenerationFormOptions = {}) {
         crossfade_ms: crossfadeMs,
         normalize: normalizeAudio,
         effects_chain: effectsChain?.length ? effectsChain : undefined,
+        stream_audio: options.livePreview || undefined,
       });
 
+      if (options.livePreview) livePlayback.start(result.id);
       // Track this generation for SSE status updates
       addPendingGeneration(result.id);
 

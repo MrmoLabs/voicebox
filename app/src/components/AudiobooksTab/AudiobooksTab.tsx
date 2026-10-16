@@ -24,11 +24,13 @@ import {
   CircleAlert,
   GripVertical,
   Loader2,
+  MoreHorizontal,
   Pencil,
   Play,
   Plus,
   RotateCcw,
   Scissors,
+  Settings2,
   Square,
   Trash2,
   Volume2,
@@ -37,15 +39,27 @@ import {
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { AudiobookPlayer } from './AudiobookPlayer';
+import { GenerationProgress } from '@/components/Generation/GenerationProgress';
+import { ModelRuntimeControl, engineModelName } from '@/components/Generation/ModelRuntimeControl';
+import { isProfileCompatibleWithEngine } from '@/lib/constants/voiceCompatibility';
+import './AudiobooksTab.css';
 import { ToastAction } from '@/components/ui/toast';
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Label } from '@/components/ui/label';
 import { Progress } from '@/components/ui/progress';
 import {
@@ -58,7 +72,12 @@ import {
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/use-toast';
 import { apiClient } from '@/lib/api/client';
-import type { AudiobookDetail, AudiobookSentence, GenerationRequest, VoiceProfileResponse } from '@/lib/api/types';
+import type {
+  AudiobookDetail,
+  AudiobookSentence,
+  GenerationRequest,
+  VoiceProfileResponse,
+} from '@/lib/api/types';
 import {
   ALL_LANGUAGES,
   getLanguageOptionsForEngine,
@@ -66,18 +85,23 @@ import {
 } from '@/lib/constants/languages';
 import { cn } from '@/lib/utils/cn';
 import { usePlatform } from '@/platform/PlatformContext';
+import { usePlayerStore } from '@/stores/playerStore';
+import { useUIStore } from '@/stores/uiStore';
+import { livePlayback } from '@/lib/audio/livePlayback';
 
 const ENGINES = [
   ['qwen:1.7B', 'Qwen3-TTS 1.7B'],
   ['qwen:0.6B', 'Qwen3-TTS 0.6B'],
   ['qwen_custom_voice:1.7B', 'Qwen CustomVoice 1.7B'],
   ['qwen_custom_voice:0.6B', 'Qwen CustomVoice 0.6B'],
+  ['qwen_voice_design', 'Qwen VoiceDesign 1.7B'],
   ['luxtts', 'LuxTTS'],
   ['chatterbox', 'Chatterbox'],
   ['chatterbox_turbo', 'Chatterbox Turbo'],
   ['tada:1B', 'TADA 1B'],
   ['tada:3B', 'TADA 3B Multilingual'],
   ['kokoro', 'Kokoro 82M'],
+  ['omnivoice', 'OmniVoice'],
 ] as const;
 
 function engineParts(value: string) {
@@ -86,11 +110,7 @@ function engineParts(value: string) {
 }
 
 function profileSupports(profile: VoiceProfileResponse, engine: string) {
-  const type = profile.voice_type || 'cloned';
-  if (type === 'preset') return profile.preset_engine === engine;
-  if (type === 'cloned')
-    return ['qwen', 'luxtts', 'chatterbox', 'chatterbox_turbo', 'tada'].includes(engine);
-  return true;
+  return isProfileCompatibleWithEngine(profile, engine);
 }
 
 function SortableSentenceRow({
@@ -157,12 +177,21 @@ export function AudiobooksTab() {
   const [bookId, setBookId] = useState<string | null>(null);
   const [chapterId, setChapterId] = useState<string | null>(null);
   const [newBookOpen, setNewBookOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const pageRef = useRef<HTMLDivElement>(null);
   const [recycleBinOpen, setRecycleBinOpen] = useState(false);
   const [newTitle, setNewTitle] = useState('');
   const [newAuthor, setNewAuthor] = useState('');
   const [sourceText, setSourceText] = useState('');
-  const [profileId, setProfileId] = useState<string>('');
-  const [engineValue, setEngineValue] = useState('qwen:1.7B');
+  const [profileId, setProfileId] = useState<string>(
+    () => useUIStore.getState().selectedProfileId || '',
+  );
+  const [engineValue, setEngineValue] = useState(() => {
+    const selected = useUIStore.getState().selectedEngine || 'qwen';
+    if (selected === 'qwen' || selected === 'qwen_custom_voice') return `${selected}:1.7B`;
+    if (selected === 'tada') return 'tada:1B';
+    return selected;
+  });
   const [language, setLanguage] = useState<LanguageCode>('zh');
   const [instruct, setInstruct] = useState('');
   const [generating, setGenerating] = useState(false);
@@ -171,7 +200,9 @@ export function AudiobooksTab() {
   const [playingGenerationId, setPlayingGenerationId] = useState<string | null>(null);
   const [playbackIntent, setPlaybackIntent] = useState<'stopped' | 'paused' | 'playing'>('stopped');
   const [deleteRequest, setDeleteRequest] = useState<
-    { type: 'single'; sentence: AudiobookSentence } | { type: 'selected'; sentences: AudiobookSentence[] } | null
+    | { type: 'single'; sentence: AudiobookSentence }
+    | { type: 'selected'; sentences: AudiobookSentence[] }
+    | null
   >(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [rate, setRate] = useState('1');
@@ -187,6 +218,12 @@ export function AudiobooksTab() {
   const stopRequestedRef = useRef(false);
   const rowRefs = useRef(new Map<string, HTMLDivElement>());
   const sentenceListRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    // This editor owns its sentence player. End previous-page previews so
+    // they neither overlap speech nor cover the bottom of the editor.
+    livePlayback.stop(false);
+    usePlayerStore.getState().reset();
+  }, []);
   const dragSensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
@@ -233,7 +270,8 @@ export function AudiobooksTab() {
   const currentSentenceId = currentSentence?.id;
   const currentGenerationId = playingGenerationId || currentSentence?.generation_id;
   const currentGenerationStatus = playingGenerationId
-    ? currentSentence?.audio_takes?.find((take) => take.generation_id === playingGenerationId)?.status
+    ? currentSentence?.audio_takes?.find((take) => take.generation_id === playingGenerationId)
+        ?.status
     : currentSentence?.generation_status;
   const { engine, modelSize } = engineParts(engineValue);
   const compatibleProfiles = useMemo(
@@ -247,7 +285,8 @@ export function AudiobooksTab() {
   ).length;
   const bookActiveCount = (book?.chapters ?? []).reduce(
     (total, item) =>
-      total + item.sentences.filter((sentence) =>
+      total +
+      item.sentences.filter((sentence) =>
         ['generating', 'loading_model'].includes(sentence.generation_status || ''),
       ).length,
     0,
@@ -261,11 +300,15 @@ export function AudiobooksTab() {
   const visibleSentences = sentences.filter((sentence) => {
     const status = sentence.generation_status;
     if (sentenceFilter === 'pending') return !sentence.generation_id;
-    if (sentenceFilter === 'processing') return ['generating', 'loading_model'].includes(status || '');
+    if (sentenceFilter === 'processing')
+      return ['generating', 'loading_model'].includes(status || '');
     if (sentenceFilter === 'completed') return status === 'completed';
     if (sentenceFilter === 'failed') return status === 'failed';
     if (sentenceFilter === 'modified')
-      return editingSentenceIds.has(sentence.id) && (sentenceDrafts[sentence.id] ?? sentence.text) !== sentence.text;
+      return (
+        editingSentenceIds.has(sentence.id) &&
+        (sentenceDrafts[sentence.id] ?? sentence.text) !== sentence.text
+      );
     return true;
   });
 
@@ -335,7 +378,13 @@ export function AudiobooksTab() {
       rowRefs.current
         .get(currentSentenceId)
         ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  }, [playingSentenceId, playbackIntent, currentSentenceId, currentGenerationId, currentGenerationStatus]);
+  }, [
+    playingSentenceId,
+    playbackIntent,
+    currentSentenceId,
+    currentGenerationId,
+    currentGenerationStatus,
+  ]);
 
   useEffect(() => {
     if (playingSentenceId && playingIndex < 0) {
@@ -536,8 +585,7 @@ export function AudiobooksTab() {
       return false;
     }
     try {
-      if (text !== sentence.text)
-        await apiClient.updateAudiobookSentence(sentence.id, { text });
+      if (text !== sentence.text) await apiClient.updateAudiobookSentence(sentence.id, { text });
       cancelEditing(sentence.id);
       return true;
     } catch (error) {
@@ -603,7 +651,9 @@ export function AudiobooksTab() {
   const confirmDeleteSelectedSentences = async (targets: AudiobookSentence[]) => {
     try {
       stopAudiobookPlayback();
-      const { snapshots } = await apiClient.deleteAudiobookSentences(targets.map((sentence) => sentence.id));
+      const { snapshots } = await apiClient.deleteAudiobookSentences(
+        targets.map((sentence) => sentence.id),
+      );
       setSelectedSentenceIds(new Set());
       await refresh();
       toast({
@@ -612,7 +662,9 @@ export function AudiobooksTab() {
           <ToastAction
             altText="撤销批量删除"
             onClick={async () => {
-              const deletionIds = snapshots.flatMap((snapshot) => snapshot.deletion_id ? [snapshot.deletion_id] : []);
+              const deletionIds = snapshots.flatMap((snapshot) =>
+                snapshot.deletion_id ? [snapshot.deletion_id] : [],
+              );
               if (deletionIds.length === snapshots.length)
                 await apiClient.restoreAudiobookSentences(chapter!.id, deletionIds);
               else
@@ -669,7 +721,10 @@ export function AudiobooksTab() {
   const splitSelectedSentence = async () => {
     const target = sentences.find((item) => selectedSentenceIds.has(item.id));
     if (selectedSentenceIds.size !== 1 || !target) return;
-    const parts = (sentenceDrafts[target.id] ?? target.text).split(/\n+/).map((item) => item.trim()).filter(Boolean);
+    const parts = (sentenceDrafts[target.id] ?? target.text)
+      .split(/\n+/)
+      .map((item) => item.trim())
+      .filter(Boolean);
     if (parts.length < 2) {
       startEditing([target]);
       toast({ title: '请在编辑框中用换行标出拆分位置，再点击“按换行拆分”' });
@@ -679,7 +734,8 @@ export function AudiobooksTab() {
       await apiClient.updateAudiobookSentence(target.id, { text: parts[0] });
       for (let index = 1; index < parts.length; index += 1)
         await apiClient.createAudiobookSentence(target.chapter_id, {
-          text: parts[index], position: target.position + index,
+          text: parts[index],
+          position: target.position + index,
           paragraph_index: target.paragraph_index,
         });
       cancelEditing(target.id);
@@ -727,12 +783,19 @@ export function AudiobooksTab() {
   const generateTargets = async (targets: AudiobookSentence[]) => {
     const selectedProfile = compatibleProfiles.find((item) => item.id === profileId);
     if (!selectedProfile) {
-      toast({ title: '当前声音无效', description: '请选择一个仍然存在且兼容当前模型的声音。', variant: 'destructive' });
+      toast({
+        title: '当前声音无效',
+        description: '请选择一个仍然存在且兼容当前模型的声音。',
+        variant: 'destructive',
+      });
       return;
     }
     const validProfileIds = new Set((profilesQuery.data ?? []).map((item) => item.id));
     if (targets.some((item) => item.profile_id && !validProfileIds.has(item.profile_id)))
-      toast({ title: '检测到失效的旧声音绑定', description: `将改用当前声音“${selectedProfile.name}”重新生成。` });
+      toast({
+        title: '检测到失效的旧声音绑定',
+        description: `将改用当前声音“${selectedProfile.name}”重新生成。`,
+      });
     if (!bookId || !chapter || !targets.length) return;
     // Synthesis and playback are deliberately independent. Clearing the
     // player's explicit intent here prevents generation_id/status changes
@@ -752,7 +815,10 @@ export function AudiobooksTab() {
         performance_mode: performanceMode,
       });
       await activePlanQuery.refetch();
-      toast({ title: `已安排 ${targets.length} 句话`, description: '生成计划已保存，重启软件后仍会继续。' });
+      toast({
+        title: `已安排 ${targets.length} 句话`,
+        description: '生成计划已保存，重启软件后仍会继续。',
+      });
     } catch (error) {
       setGenerating(false);
       toast({ title: '创建生成计划失败', description: String(error), variant: 'destructive' });
@@ -762,7 +828,9 @@ export function AudiobooksTab() {
   const generateAll = async (onlyFailed = false) =>
     generateTargets(
       sentences.filter((s) =>
-        onlyFailed ? s.generation_status === 'failed' : !s.generation_id || s.generation_status === 'failed',
+        onlyFailed
+          ? s.generation_status === 'failed'
+          : !s.generation_id || s.generation_status === 'failed',
       ),
     );
 
@@ -792,7 +860,10 @@ export function AudiobooksTab() {
     const sentence = sentences[index];
     if (!sentence) return;
     if (sentence.generation_status !== 'completed' || !sentence.generation_id) {
-      toast({ title: '该句尚无可播放语音', description: '生成完成后不会自动播放，请届时手动点击播放。' });
+      toast({
+        title: '该句尚无可播放语音',
+        description: '生成完成后不会自动播放，请届时手动点击播放。',
+      });
       return;
     }
     setPlayingGenerationId(null);
@@ -830,8 +901,7 @@ export function AudiobooksTab() {
     if (next >= 0) {
       setPlayingGenerationId(null);
       setPlayingSentenceId(sentences[next].id);
-    }
-    else {
+    } else {
       setPlaybackIntent('stopped');
       setIsPlaying(false);
     }
@@ -867,121 +937,413 @@ export function AudiobooksTab() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [editingSentenceIds, selectedSentenceIds, sentenceDrafts, sentences]);
 
-  return (
-    <div className="h-full min-h-0 grid grid-cols-[240px_minmax(420px,1fr)_300px] gap-5 py-6 pb-24">
-      <aside className="min-h-0 flex flex-col border-r pr-4">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-xl font-bold">有声图书</h2>
-          <Button size="icon" variant="outline" onClick={() => setNewBookOpen(true)}>
-            <Plus className="h-4 w-4" />
-          </Button>
+  const generationSettings = (
+    <div className="space-y-5">
+      <ModelRuntimeControl modelName={engineModelName(engine || 'qwen', modelSize)} />
+      <div className="space-y-2">
+        <Label>声音</Label>
+        <Select value={profileId} onValueChange={setProfileId}>
+          <SelectTrigger>
+            <SelectValue placeholder="选择声音" />
+          </SelectTrigger>
+          <SelectContent>
+            {compatibleProfiles.map((p) => (
+              <SelectItem key={p.id} value={p.id}>
+                {p.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {compatibleProfiles.length === 0 && (
+          <p role="status" className="text-xs text-amber-600">
+            {engine === 'qwen_voice_design'
+              ? 'VoiceDesign 需要设计声音，请先到声音页面通过文字描述创建。已有克隆声音请使用 Qwen3-TTS Base。'
+              : '没有兼容此引擎的声音，请先创建或切换引擎。'}
+          </p>
+        )}
+      </div>
+      <div className="space-y-2">
+        <Label>引擎与模型</Label>
+        <Select value={engineValue} onValueChange={setEngineValue}>
+          <SelectTrigger>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {ENGINES.map(([value, label]) => (
+              <SelectItem key={value} value={value}>
+                {label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      <div className="space-y-2">
+        <Label>语言</Label>
+        <Select value={language} onValueChange={(v) => setLanguage(v as LanguageCode)}>
+          <SelectTrigger>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {getLanguageOptionsForEngine(engine || 'qwen').map((item) => (
+              <SelectItem key={item.value} value={item.value}>
+                {ALL_LANGUAGES[item.value]}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      <div className="space-y-2">
+        <Label>批量性能模式</Label>
+        <Select
+          value={performanceMode}
+          onValueChange={(value) => setPerformanceMode(value as 'stable' | 'fast')}
+        >
+          <SelectTrigger>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="stable">稳定模式（逐句提交）</SelectItem>
+            <SelectItem value="fast">快速模式（提前排队）</SelectItem>
+          </SelectContent>
+        </Select>
+        <p className="text-[11px] text-muted-foreground">
+          快速模式提前提交后续句子，适合确定无需修改的章节；稳定模式逐句提交，便于随时调整。
+        </p>
+      </div>
+      {engine === 'qwen_custom_voice' && (
+        <div className="space-y-2">
+          <Label>演绎指令</Label>
+          <Textarea
+            value={instruct}
+            onChange={(e) => setInstruct(e.target.value)}
+            placeholder="例如：温暖、平静地讲述"
+            className="min-h-20"
+          />
         </div>
-        <div className="space-y-2 overflow-y-auto">
-          {(booksQuery.data ?? []).map((item) => (
-            <button
-              type="button"
-              key={item.id}
-              onClick={() => setBookId(item.id)}
-              className={cn(
-                'w-full text-left rounded-lg border p-3 hover:bg-muted/50',
-                item.id === bookId && 'border-primary bg-primary/5',
-              )}
-            >
-              <div className="font-medium truncate">{item.title}</div>
-              <div className="text-xs text-muted-foreground mt-1">
-                {item.chapter_count} 章 · {item.sentence_count} 句
-              </div>
-            </button>
-          ))}
-          {!booksQuery.isLoading && !booksQuery.data?.length && (
-            <div className="text-center text-sm text-muted-foreground py-12">
-              <BookOpen className="h-9 w-9 mx-auto mb-3" />
-              创建第一本有声图书
+      )}
+      {!!sentences.length && (
+        <div className="rounded-lg bg-muted/40 p-3 text-sm space-y-1">
+          <div className="flex justify-between">
+            <span>总计</span>
+            <span>{sentences.length} 句</span>
+          </div>
+          <div className="flex justify-between text-emerald-500">
+            <span>已完成</span>
+            <span>{completedCount}</span>
+          </div>
+          <div className="flex justify-between">
+            <span>生成中</span>
+            <span>{activeCount}</span>
+          </div>
+          {failedCount > 0 && (
+            <div className="flex justify-between text-destructive">
+              <span>失败</span>
+              <span>{failedCount}</span>
             </div>
           )}
         </div>
-      </aside>
-
-      <main className="min-h-0 flex flex-col">
-        {!book || !chapter ? (
-          <div className="h-full flex items-center justify-center text-muted-foreground">
-            请新建或选择一本图书
-          </div>
+      )}
+      <Button
+        className="w-full"
+        disabled={!sentences.length || !profileId || generating}
+        onClick={() => generateAll(false)}
+      >
+        {generating ? (
+          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
         ) : (
-          <>
-            <div className="shrink-0 mb-4">
-              <div className="flex items-center gap-3">
-                <h1 className="text-2xl font-bold">{book.title}</h1>
-                <span className="text-sm text-muted-foreground">{book.author}</span>
-              </div>
-              <div className="flex gap-2 mt-3">
-                {book.chapters.map((c) => (
-                  <Button
-                    key={c.id}
-                    size="sm"
-                    variant={c.id === chapter.id ? 'default' : 'outline'}
-                    onClick={() => setChapterId(c.id)}
-                  >
-                    {c.title}
-                  </Button>
+          <Volume2 className="h-4 w-4 mr-2" />
+        )}
+        生成全部待处理句子
+      </Button>
+      {(generating || bookActiveCount > 0) && (
+        <Button
+          variant="destructive"
+          className="w-full"
+          disabled={stopping}
+          onClick={stopGeneration}
+        >
+          {stopping ? (
+            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+          ) : (
+            <Square className="h-4 w-4 mr-2" />
+          )}
+          {stopping
+            ? '正在中止整本书…'
+            : `中止整本书生成${bookActiveCount ? `（${bookActiveCount}）` : ''}`}
+        </Button>
+      )}
+      {failedCount > 0 && (
+        <Button
+          variant="outline"
+          className="w-full"
+          disabled={generating}
+          onClick={() => generateAll(true)}
+        >
+          <RotateCcw className="h-4 w-4 mr-2" />
+          仅重试失败项
+        </Button>
+      )}
+      {!!chapter && completedCount > 0 && (
+        <div className="space-y-2 rounded-lg border p-3">
+          <Label>导出整章</Label>
+          <div className="flex items-center gap-2">
+            <Input
+              className="min-w-0 flex-1"
+              type="number"
+              min="0"
+              max="10000"
+              value={exportPauseMs}
+              onChange={(event) => setExportPauseMs(event.target.value)}
+            />
+            <span className="shrink-0 text-xs text-muted-foreground">毫秒停顿</span>
+          </div>
+          <Button
+            className="w-full"
+            variant="outline"
+            disabled={exporting}
+            onClick={async () => {
+              setExporting(true);
+              try {
+                const blob = await apiClient.exportAudiobookChapter(
+                  chapter.id,
+                  Number(exportPauseMs) || 0,
+                );
+                await platform.filesystem.saveFile(`${chapter.title || 'chapter'}.wav`, blob, [
+                  { name: 'WAV 音频', extensions: ['wav'] },
+                ]);
+                toast({ title: '整章音频已导出' });
+              } catch (error) {
+                toast({
+                  title: '导出整章失败',
+                  description: String(error),
+                  variant: 'destructive',
+                });
+              } finally {
+                setExporting(false);
+              }
+            }}
+          >
+            {exporting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            {exporting ? '正在合并并保存…' : '导出整章 WAV'}
+          </Button>
+        </div>
+      )}
+      {book && (
+        <Button
+          variant="ghost"
+          className="w-full text-destructive"
+          onClick={async () => {
+            if (window.confirm(`删除《${book.title}》？语音历史不会被删除。`)) {
+              await apiClient.deleteAudiobook(book.id);
+              setBookId(null);
+              await refresh();
+            }
+          }}
+        >
+          <Trash2 className="h-4 w-4 mr-2" />
+          删除图书
+        </Button>
+      )}
+    </div>
+  );
+
+  return (
+    <div ref={pageRef} className="audiobooks-page">
+      <div
+        className={cn('audiobooks-workspace', playingIndex >= 0 && currentSentence && 'has-player')}
+      >
+        <aside className="audiobook-library">
+          <div className="audiobook-library-heading flex items-center justify-between gap-3">
+            <h2 className="text-xl font-bold">有声图书</h2>
+            <Button
+              size="icon"
+              variant="outline"
+              aria-label="新建图书"
+              onClick={() => setNewBookOpen(true)}
+            >
+              <Plus className="h-4 w-4" />
+            </Button>
+          </div>
+          <div className="audiobook-library-select min-w-0">
+            <Select value={bookId ?? ''} onValueChange={setBookId}>
+              <SelectTrigger aria-label="选择图书">
+                <SelectValue placeholder="选择一本图书" />
+              </SelectTrigger>
+              <SelectContent>
+                {(booksQuery.data ?? []).map((item) => (
+                  <SelectItem key={item.id} value={item.id}>
+                    {item.title}
+                  </SelectItem>
                 ))}
-                <Button size="sm" variant="ghost" onClick={addChapter}>
-                  <Plus className="h-4 w-4 mr-1" />
-                  新增章节
-                </Button>
-              </div>
-            </div>
-            {!sentences.length ? (
-              <div className="flex-1 min-h-0 flex flex-col">
-                <div className="flex justify-between mb-2">
-                  <Label>粘贴章节正文</Label>
-                  <span className="text-xs text-muted-foreground">
-                    {sourceText.length.toLocaleString()} 字
-                  </span>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="mt-5 mb-2 flex items-center justify-between text-xs text-muted-foreground">
+            <span>章节目录</span>
+            <span>{book?.chapters.length ?? 0} 章</span>
+          </div>
+          <nav aria-label="章节目录" className="audiobook-library-list space-y-1 overflow-y-auto">
+            {(book?.chapters ?? []).map((item, index) => (
+              <button
+                type="button"
+                key={item.id}
+                onClick={() => setChapterId(item.id)}
+                aria-current={item.id === chapter?.id ? 'page' : undefined}
+                className={cn(
+                  'w-full text-left rounded-md px-3 py-3 hover:bg-muted/50',
+                  item.id === chapter?.id && 'bg-primary/10 text-primary',
+                )}
+              >
+                <div className="font-medium truncate">
+                  {index + 1}. {item.title}
                 </div>
-                <Textarea
-                  value={sourceText}
-                  onChange={(e) => setSourceText(e.target.value)}
-                  placeholder="在这里粘贴大段文字。段落和中文、英文句末标点会被自动识别……"
-                  className="flex-1 resize-none text-base leading-8"
-                />
-                <Button className="mt-4" disabled={!sourceText.trim()} onClick={splitChapter}>
-                  <Scissors className="h-4 w-4 mr-2" />
-                  分析并切分
-                </Button>
+                <div className="text-xs text-muted-foreground mt-1">
+                  {item.sentences.length} 句 · 已生成{' '}
+                  {
+                    item.sentences.filter((sentence) => sentence.generation_status === 'completed')
+                      .length
+                  }
+                </div>
+              </button>
+            ))}
+            {!booksQuery.isLoading && !booksQuery.data?.length && (
+              <div className="text-center text-sm text-muted-foreground py-12">
+                <BookOpen className="h-9 w-9 mx-auto mb-3" />
+                创建第一本有声图书
               </div>
-            ) : (
-              <div className="flex-1 min-h-0 flex flex-col">
-                <div className="shrink-0 rounded-xl border bg-card p-4 mb-3 space-y-3">
-                  <div className="flex items-center justify-between gap-4 text-sm">
-                    <div className="font-medium">
-                      {processingIndex >= 0
-                        ? `正在处理第 ${processingIndex + 1} 句`
-                        : generating
-                          ? '正在准备下一条任务'
-                          : activeCount > 0
-                            ? '正在同步任务状态'
-                            : processedCount === sentences.length
-                              ? '本章处理完成'
-                              : '等待开始生成'}
-                    </div>
-                    <div className="text-muted-foreground tabular-nums">
-                      已处理 {processedCount} / {sentences.length}
-                    </div>
+            )}
+          </nav>
+          {book && (
+            <Button variant="outline" className="mt-3 shrink-0" onClick={addChapter}>
+              <Plus className="mr-2 h-4 w-4" />
+              新增章节
+            </Button>
+          )}
+        </aside>
+
+        <main className="audiobook-editor min-w-0 min-h-0 flex flex-col">
+          {!book || !chapter ? (
+            <div className="h-full flex items-center justify-center text-muted-foreground">
+              请新建或选择一本图书
+            </div>
+          ) : (
+            <>
+              <div className="shrink-0 mb-4 flex flex-wrap items-center justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <div className="mb-1 text-xs text-muted-foreground truncate">
+                    {book.title}
+                    {book.author ? ` · ${book.author}` : ''}
                   </div>
-                  <Progress value={progressPercent} className="h-2" />
-                  <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted-foreground">
-                    <span>未处理 {pendingCount}</span>
-                    <span className="text-blue-500">处理中 {activeCount}</span>
-                    <span className="text-emerald-500">已完成 {completedCount}</span>
-                    <span className={failedCount ? 'text-destructive' : undefined}>
-                      失败 {failedCount}
+                  <div className="flex min-w-0 items-baseline gap-3">
+                    <h1 className="min-w-0 truncate text-xl font-semibold" title={chapter.title}>
+                      {chapter.title}
+                    </h1>
+                    <span
+                      className="min-w-0 truncate text-sm text-muted-foreground"
+                      title="当前章节字数"
+                    >
+                      {sentences
+                        .reduce((total, sentence) => total + sentence.text.length, 0)
+                        .toLocaleString()}{' '}
+                      字
                     </span>
                   </div>
-                  <div className="flex flex-col gap-2">
-                    <div className="flex min-w-0 flex-wrap items-center gap-2">
+                </div>
+                <div className="flex items-center gap-2">
+                  {generating || bookActiveCount > 0 ? (
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      disabled={stopping}
+                      onClick={stopGeneration}
+                    >
+                      <Square className="mr-2 h-4 w-4" />
+                      {stopping ? '正在停止…' : '停止生成'}
+                    </Button>
+                  ) : (
+                    <Button
+                      size="sm"
+                      disabled={!sentences.length || !profileId}
+                      onClick={() => generateAll(false)}
+                    >
+                      <Volume2 className="mr-2 h-4 w-4" />
+                      生成本章
+                    </Button>
+                  )}
+                  <Button size="sm" variant="outline" onClick={() => setSettingsOpen(true)}>
+                    <Settings2 className="mr-2 h-4 w-4" />
+                    声音与设置
+                  </Button>
+                </div>
+                <div className="basis-full text-xs text-muted-foreground">
+                  下次生成：
+                  {compatibleProfiles.find((profile) => profile.id === profileId)?.name ||
+                    '尚未选择声音'}{' '}
+                  · {ENGINES.find(([value]) => value === engineValue)?.[1]}
+                  {generating ? ' · 当前批次按提交时的设置继续' : ''}
+                </div>
+              </div>
+              {!sentences.length ? (
+                <div className="flex-1 min-h-0 flex flex-col">
+                  <div className="flex justify-between mb-2">
+                    <Label>粘贴章节正文</Label>
+                    <span className="text-xs text-muted-foreground">
+                      {sourceText.length.toLocaleString()} 字
+                    </span>
+                  </div>
+                  <Textarea
+                    value={sourceText}
+                    onChange={(e) => setSourceText(e.target.value)}
+                    placeholder="在这里粘贴大段文字。段落和中文、英文句末标点会被自动识别……"
+                    className="flex-1 resize-none text-base leading-8"
+                  />
+                  <Button className="mt-4" disabled={!sourceText.trim()} onClick={splitChapter}>
+                    <Scissors className="h-4 w-4 mr-2" />
+                    分析并切分
+                  </Button>
+                </div>
+              ) : (
+                <div className="flex-1 min-h-0 flex flex-col">
+                  <div className="audiobook-toolbar shrink-0 rounded-xl border bg-card p-3 mb-3 space-y-2">
+                    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-sm">
+                      <div className="font-medium">
+                        {processingIndex >= 0
+                          ? `正在处理第 ${processingIndex + 1} 句`
+                          : generating
+                            ? '正在准备下一条任务'
+                            : activeCount > 0
+                              ? '正在同步任务状态'
+                              : processedCount === sentences.length
+                                ? '本章处理完成'
+                                : '等待开始生成'}
+                      </div>
+                      <div className="text-muted-foreground tabular-nums">
+                        已处理 {processedCount} / {sentences.length}
+                      </div>
+                    </div>
+                    <Progress value={progressPercent} className="h-2" />
+                    {processingIndex >= 0 && sentences[processingIndex].generation_id && (
+                      <GenerationProgress
+                        id={sentences[processingIndex].generation_id!}
+                        loadingModel={
+                          sentences[processingIndex].generation_status === 'loading_model'
+                        }
+                        progress={sentences[processingIndex].generation_progress}
+                      />
+                    )}
+                    <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted-foreground">
+                      <span>未处理 {pendingCount}</span>
+                      <span className="text-blue-500">处理中 {activeCount}</span>
+                      <span className="text-emerald-500">已完成 {completedCount}</span>
+                      <span className={failedCount ? 'text-destructive' : undefined}>
+                        失败 {failedCount}
+                      </span>
+                    </div>
+                    <div className="audiobook-toolbar-navigation">
                       <Select value={sentenceFilter} onValueChange={setSentenceFilter}>
-                        <SelectTrigger className="h-8 w-32"><SelectValue /></SelectTrigger>
+                        <SelectTrigger className="h-7 w-24 text-xs" aria-label="筛选句子">
+                          <SelectValue />
+                        </SelectTrigger>
                         <SelectContent>
                           <SelectItem value="all">全部</SelectItem>
                           <SelectItem value="pending">未生成</SelectItem>
@@ -991,18 +1353,26 @@ export function AudiobooksTab() {
                           <SelectItem value="modified">已修改</SelectItem>
                         </SelectContent>
                       </Select>
-                      <div className="flex max-w-full items-center gap-1 overflow-x-auto rounded-md border px-1">
-                        <Button size="icon" variant="ghost" className="h-7 w-7" title="回到顶部" onClick={() => jumpToSentence(0)}>
+                      <div className="flex max-w-full items-center gap-0 overflow-x-auto rounded-md border px-0.5">
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-7 w-7"
+                          title="回到顶部"
+                          onClick={() => jumpToSentence(0)}
+                        >
                           <ChevronsUp className="h-4 w-4" />
                         </Button>
                         <Input
                           value={jumpPosition}
-                          onChange={(event) => setJumpPosition(event.target.value.replace(/\D/g, ''))}
+                          onChange={(event) =>
+                            setJumpPosition(event.target.value.replace(/\D/g, ''))
+                          }
                           onKeyDown={(event) => {
                             if (event.key === 'Enter' && jumpPosition)
                               jumpToSentence(Number(jumpPosition) - 1);
                           }}
-                          className="h-7 w-20 border-0 px-1 text-center shadow-none"
+                          className="h-7 w-14 border-0 px-1 text-center text-xs shadow-none"
                           placeholder={`1-${sentences.length}`}
                           aria-label="跳转到句子编号"
                         />
@@ -1037,7 +1407,8 @@ export function AudiobooksTab() {
                       </div>
                       <Button
                         size="sm"
-                        variant="outline"
+                        variant="ghost"
+                        className="audiobook-toolbar-button"
                         onClick={() =>
                           setSelectedSentenceIds(
                             selectedSentenceIds.size === sentences.length
@@ -1048,529 +1419,468 @@ export function AudiobooksTab() {
                       >
                         {selectedSentenceIds.size === sentences.length ? '取消全选' : '全选'}
                       </Button>
-                      {!!selectedSentenceIds.size && (
-                        <>
-                          <span className="whitespace-nowrap text-xs text-muted-foreground">
-                            已选择 {selectedSentenceIds.size} 句
-                          </span>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="audiobook-toolbar-button ml-auto"
+                            aria-label="章节工具"
+                          >
+                            <MoreHorizontal className="h-3.5 w-3.5" />
+                            章节工具
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem onSelect={() => addSentence(sentences.length)}>
+                            <Plus className="mr-2 h-4 w-4" />
+                            末尾新增句子
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onSelect={() => setRecycleBinOpen(true)}>
+                            <RotateCcw className="mr-2 h-4 w-4" />
+                            回收站
+                            {deletedSentencesQuery.data?.length
+                              ? ` (${deletedSentencesQuery.data.length})`
+                              : ''}
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
+                    {(selectedSentenceIds.size > 0 || editingSentenceIds.size > 0) && (
+                      <div
+                        className="audiobook-selection-toolbar"
+                        role="group"
+                        aria-label="句子批量操作"
+                      >
+                        {selectedSentenceIds.size > 0 && (
+                          <>
+                            <span className="whitespace-nowrap text-xs text-muted-foreground tabular-nums">
+                              已选 {selectedSentenceIds.size} 句
+                            </span>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="audiobook-toolbar-button"
+                              onClick={() =>
+                                startEditing(
+                                  sentences.filter((item) => selectedSentenceIds.has(item.id)),
+                                )
+                              }
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                              编辑所选
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="secondary"
+                              className="audiobook-toolbar-button"
+                              onClick={generateSelected}
+                              disabled={generating}
+                            >
+                              <Volume2 className="h-3.5 w-3.5" />
+                              生成所选
+                            </Button>
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="audiobook-toolbar-button"
+                                  aria-label="更多所选句子操作"
+                                >
+                                  <MoreHorizontal className="h-3.5 w-3.5" />
+                                  更多
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="start">
+                                <DropdownMenuItem
+                                  onSelect={mergeSelectedSentences}
+                                  disabled={selectedSentenceIds.size < 2}
+                                >
+                                  合并所选句子
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  onSelect={splitSelectedSentence}
+                                  disabled={selectedSentenceIds.size !== 1}
+                                >
+                                  按换行拆分
+                                </DropdownMenuItem>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem
+                                  className="text-destructive focus:text-destructive"
+                                  onSelect={deleteSelectedSentences}
+                                >
+                                  <Trash2 className="mr-2 h-4 w-4" />
+                                  删除所选
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          </>
+                        )}
+                        {editingSentenceIds.size > 0 && (
                           <Button
                             size="sm"
                             variant="outline"
-                            onClick={() =>
-                              startEditing(
-                                sentences.filter((item) => selectedSentenceIds.has(item.id)),
-                              )
-                            }
+                            className="audiobook-toolbar-button ml-auto"
+                            onClick={saveSelectedEdits}
+                            title="保存全部编辑 (Ctrl+S)"
                           >
-                            <Pencil className="h-3.5 w-3.5 mr-1" />
-                            编辑所选
+                            <Check className="h-3.5 w-3.5" />
+                            保存编辑 ({editingSentenceIds.size})
                           </Button>
-                          <Button size="sm" variant="outline" onClick={saveSelectedEdits}>
-                            <Check className="h-3.5 w-3.5 mr-1" />
-                            保存全部编辑
-                          </Button>
-                          <Button size="sm" variant="outline" onClick={generateSelected} disabled={generating}>
-                            <Volume2 className="h-3.5 w-3.5 mr-1" />仅生成所选
-                          </Button>
-                          <Button size="sm" variant="outline" onClick={mergeSelectedSentences} disabled={selectedSentenceIds.size < 2}>
-                            合并
-                          </Button>
-                          <Button size="sm" variant="outline" onClick={splitSelectedSentence} disabled={selectedSentenceIds.size !== 1}>
-                            按换行拆分
-                          </Button>
+                        )}
+                        {selectedSentenceIds.size > 0 && (
                           <Button
-                            size="sm"
-                            variant="destructive"
-                            onClick={deleteSelectedSentences}
+                            size="icon"
+                            variant="ghost"
+                            className="h-7 w-7 shrink-0 rounded-md"
+                            onClick={() => setSelectedSentenceIds(new Set())}
+                            aria-label="取消选择"
+                            title="取消选择"
                           >
-                            <Trash2 className="h-3.5 w-3.5 mr-1" />
-                            删除所选
+                            <X className="h-3.5 w-3.5" />
                           </Button>
-                        </>
-                      )}
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2 border-t pt-2">
-                      <Button size="sm" variant="outline" onClick={() => setRecycleBinOpen(true)}>
-                        <RotateCcw className="h-3.5 w-3.5 mr-1" />
-                        回收站{deletedSentencesQuery.data?.length ? ` (${deletedSentencesQuery.data.length})` : ''}
-                      </Button>
-                      <Button size="sm" variant="outline" onClick={() => addSentence(sentences.length)}>
-                        <Plus className="h-3.5 w-3.5 mr-1" />
-                        末尾新增句子
-                      </Button>
-                    </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  <div
+                    ref={sentenceListRef}
+                    className="audiobook-sentences flex-1 min-h-0 pr-2 space-y-1"
+                    role="region"
+                    aria-label="章节正文列表"
+                    tabIndex={0}
+                  >
+                    <DndContext
+                      sensors={dragSensors}
+                      collisionDetection={closestCenter}
+                      onDragEnd={reorderSentences}
+                    >
+                      <SortableContext
+                        items={visibleSentences.map((item) => item.id)}
+                        strategy={verticalListSortingStrategy}
+                      >
+                        {visibleSentences.map((sentence) => {
+                          const index = sentences.findIndex((item) => item.id === sentence.id);
+                          const active = index === playingIndex;
+                          const status = sentence.generation_status;
+                          const isProcessing = ['generating', 'loading_model'].includes(
+                            status || '',
+                          );
+                          const phase = sentence.generation_progress?.stage;
+                          const phaseLabel =
+                            phase &&
+                            {
+                              queued: '排队中',
+                              loading_model: '载入模型',
+                              preparing_voice: '准备声音',
+                              generating: '生成中',
+                              finalizing: '保存音频',
+                            }[phase];
+                          const statusLabel =
+                            active && isPlaying
+                              ? '正在播放'
+                              : status === 'completed'
+                                ? '已完成'
+                                : isProcessing && phaseLabel
+                                  ? phaseLabel
+                                  : status === 'loading_model'
+                                    ? '正在加载模型'
+                                    : status === 'generating'
+                                      ? '正在生成'
+                                      : status === 'failed'
+                                        ? '生成失败'
+                                        : sentence.generation_id
+                                          ? '等待状态'
+                                          : '未处理';
+                          return (
+                            <SortableSentenceRow
+                              id={sentence.id}
+                              disabled={
+                                sentenceFilter !== 'all' ||
+                                isProcessing ||
+                                editingSentenceIds.has(sentence.id)
+                              }
+                              rowRef={(el) => {
+                                if (el) rowRefs.current.set(sentence.id, el);
+                                else rowRefs.current.delete(sentence.id);
+                              }}
+                              key={sentence.id}
+                              onClick={() => status === 'completed' && playFrom(index)}
+                              className={cn(
+                                'audiobook-sentence w-full text-left rounded-lg px-3 py-3 border border-transparent transition-colors',
+                                status === 'completed' && 'hover:bg-muted/50 cursor-pointer',
+                                active && 'bg-primary/10 border-primary/40 shadow-sm',
+                              )}
+                            >
+                              <input
+                                type="checkbox"
+                                className="mt-1 h-4 w-4 accent-primary"
+                                checked={selectedSentenceIds.has(sentence.id)}
+                                aria-label={`选择第 ${index + 1} 句`}
+                                onClick={(event) => event.stopPropagation()}
+                                onChange={(event) => {
+                                  setSelectedSentenceIds((current) => {
+                                    const next = new Set(current);
+                                    if (event.target.checked) next.add(sentence.id);
+                                    else next.delete(sentence.id);
+                                    return next;
+                                  });
+                                }}
+                              />
+                              <span className="text-xs text-muted-foreground pt-1 tabular-nums">
+                                {String(index + 1).padStart(3, '0')}
+                              </span>
+                              <span className="audiobook-sentence-body min-w-0">
+                                {editingSentenceIds.has(sentence.id) ? (
+                                  <span className="block">
+                                    <Textarea
+                                      value={sentenceDrafts[sentence.id] ?? sentence.text}
+                                      className="min-h-20 resize-y leading-6"
+                                      autoFocus
+                                      onClick={(event) => event.stopPropagation()}
+                                      onChange={(event) =>
+                                        setSentenceDrafts((current) => ({
+                                          ...current,
+                                          [sentence.id]: event.target.value,
+                                        }))
+                                      }
+                                    />
+                                    {(sentenceDrafts[sentence.id] ?? sentence.text) !==
+                                      sentence.text && (
+                                      <span className="mt-1 inline-block rounded bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-600">
+                                        未保存
+                                      </span>
+                                    )}
+                                  </span>
+                                ) : (
+                                  <span
+                                    className={cn(
+                                      'block leading-7',
+                                      active && 'text-primary font-medium',
+                                    )}
+                                  >
+                                    {sentence.text}
+                                  </span>
+                                )}
+                                {status === 'failed' && sentence.generation_error && (
+                                  <span className="block text-xs text-destructive mt-1 line-clamp-2">
+                                    {sentence.error_category && `[${sentence.error_category}] `}
+                                    {sentence.generation_error}
+                                  </span>
+                                )}
+                                {!!sentence.generation_id && (
+                                  <span className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+                                    <span>时长：{formatDuration(sentence.duration)}</span>
+                                    <span>声音：{sentence.profile_name || '—'}</span>
+                                    <span>
+                                      模型：{sentence.engine || '—'}
+                                      {sentence.model_size ? ` ${sentence.model_size}` : ''}
+                                    </span>
+                                    <span
+                                      className="sr-only"
+                                      title={
+                                        sentence.audio_path ||
+                                        (sentence.generation_status === 'completed'
+                                          ? `generations\\${sentence.generation_id}.wav`
+                                          : '尚未生成文件')
+                                      }
+                                    >
+                                      文件：
+                                      {sentence.audio_path ||
+                                        (sentence.generation_status === 'completed'
+                                          ? `generations\\${sentence.generation_id}.wav`
+                                          : '尚未生成')}
+                                    </span>
+                                  </span>
+                                )}
+                                {(sentence.audio_takes?.length ?? 0) > 0 && (
+                                  <details
+                                    className="mt-2 space-y-1 text-xs"
+                                    onClick={(event) => event.stopPropagation()}
+                                  >
+                                    <summary className="cursor-pointer text-muted-foreground py-1">
+                                      语音版本（{sentence.audio_takes.length}）
+                                    </summary>
+                                    {sentence.audio_takes.map((take, takeIndex) => (
+                                      <span
+                                        key={take.generation_id}
+                                        className={cn(
+                                          'audiobook-audio-take flex flex-wrap items-center gap-2 rounded px-2 py-1 text-[11px]',
+                                          take.selected && 'bg-primary/10 text-primary',
+                                        )}
+                                        onClick={(event) => event.stopPropagation()}
+                                      >
+                                        <span className="min-w-0 basis-32 flex-1 truncate">
+                                          版本 {takeIndex + 1} · {take.profile_name || '未知声音'} ·{' '}
+                                          {take.engine || '—'}
+                                          {take.model_size ? ` ${take.model_size}` : ''} ·{' '}
+                                          {formatDuration(take.duration)}
+                                        </span>
+                                        {take.selected && <span className="font-medium">当前</span>}
+                                        {take.status === 'completed' && (
+                                          <Button
+                                            size="icon"
+                                            variant="ghost"
+                                            className="h-6 w-6"
+                                            title="试听这条语音"
+                                            onClick={() =>
+                                              playAudioTake(sentence, take.generation_id)
+                                            }
+                                          >
+                                            <Play className="h-3 w-3" />
+                                          </Button>
+                                        )}
+                                        {!take.selected && take.status === 'completed' && (
+                                          <Button
+                                            size="sm"
+                                            variant="ghost"
+                                            className="h-6 px-2 text-[11px]"
+                                            onClick={() =>
+                                              void selectAudioTake(sentence, take.generation_id)
+                                            }
+                                          >
+                                            设为当前
+                                          </Button>
+                                        )}
+                                        <Button
+                                          size="icon"
+                                          variant="ghost"
+                                          className="h-6 w-6 text-destructive"
+                                          title="删除这条语音"
+                                          onClick={() =>
+                                            void deleteAudioTake(sentence, take.generation_id)
+                                          }
+                                        >
+                                          <Trash2 className="h-3 w-3" />
+                                        </Button>
+                                      </span>
+                                    ))}
+                                  </details>
+                                )}
+                              </span>
+                              <span className="audiobook-sentence-actions flex flex-wrap justify-end items-center gap-2 text-xs text-muted-foreground">
+                                {active && isPlaying ? (
+                                  <Volume2 className="h-4 w-4 text-primary animate-pulse" />
+                                ) : status === 'completed' ? (
+                                  <Play className="h-4 w-4" />
+                                ) : isProcessing ? (
+                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                ) : status === 'failed' ? (
+                                  <CircleAlert className="h-4 w-4 text-destructive" />
+                                ) : null}
+                                <span
+                                  className={cn(
+                                    'rounded-full border px-2.5 py-1 whitespace-nowrap font-medium',
+                                    !sentence.generation_id && 'bg-muted/50',
+                                    isProcessing &&
+                                      'border-blue-500/40 bg-blue-500/10 text-blue-500',
+                                    status === 'completed' &&
+                                      'border-emerald-500/40 bg-emerald-500/10 text-emerald-500',
+                                    status === 'failed' &&
+                                      'border-destructive/40 bg-destructive/10 text-destructive',
+                                    active &&
+                                      isPlaying &&
+                                      'border-primary/40 bg-primary/10 text-primary',
+                                  )}
+                                >
+                                  {statusLabel}
+                                </span>
+                                {(status === 'completed' || status === 'failed') && (
+                                  <Button
+                                    size="icon"
+                                    variant="ghost"
+                                    className="h-7 w-7"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      if (status === 'completed') regenerateSentence(sentence);
+                                      else generateSentence(sentence);
+                                    }}
+                                    title={status === 'completed' ? '重新生成这句话' : '重试这句话'}
+                                  >
+                                    <RotateCcw className="h-3.5 w-3.5" />
+                                  </Button>
+                                )}
+                                {editingSentenceIds.has(sentence.id) ? (
+                                  <>
+                                    <Button
+                                      size="icon"
+                                      variant="ghost"
+                                      className="h-7 w-7 text-emerald-500"
+                                      title="保存修改"
+                                      onClick={async (e) => {
+                                        e.stopPropagation();
+                                        if (await saveSentence(sentence)) await refresh();
+                                      }}
+                                    >
+                                      <Check className="h-3.5 w-3.5" />
+                                    </Button>
+                                    <Button
+                                      size="icon"
+                                      variant="ghost"
+                                      className="h-7 w-7"
+                                      title="取消修改"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        cancelEditing(sentence.id);
+                                      }}
+                                    >
+                                      <X className="h-3.5 w-3.5" />
+                                    </Button>
+                                  </>
+                                ) : (
+                                  <Button
+                                    size="icon"
+                                    variant="ghost"
+                                    className="h-7 w-7"
+                                    disabled={isProcessing}
+                                    title="行内编辑句子"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      startEditing([sentence]);
+                                    }}
+                                  >
+                                    <Pencil className="h-3.5 w-3.5" />
+                                  </Button>
+                                )}
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  className="h-7 w-7"
+                                  title="在此句后新增"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    addSentence(index + 1);
+                                  }}
+                                >
+                                  <Plus className="h-3.5 w-3.5" />
+                                </Button>
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  className="h-7 w-7 text-destructive"
+                                  disabled={isProcessing}
+                                  title="删除句子"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    deleteSentence(sentence);
+                                  }}
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </Button>
+                              </span>
+                            </SortableSentenceRow>
+                          );
+                        })}
+                      </SortableContext>
+                    </DndContext>
                   </div>
                 </div>
-                <div
-                  ref={sentenceListRef}
-                  className="flex-1 min-h-0 overflow-y-scroll pr-2 space-y-1 [scrollbar-gutter:stable] [&::-webkit-scrollbar]:w-4 [&::-webkit-scrollbar-track]:rounded-full [&::-webkit-scrollbar-track]:bg-muted/60 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:border-4 [&::-webkit-scrollbar-thumb]:border-solid [&::-webkit-scrollbar-thumb]:border-transparent [&::-webkit-scrollbar-thumb]:bg-foreground/35 [&::-webkit-scrollbar-thumb]:bg-clip-padding hover:[&::-webkit-scrollbar-thumb]:bg-foreground/55"
-                >
-                  <DndContext
-                    sensors={dragSensors}
-                    collisionDetection={closestCenter}
-                    onDragEnd={reorderSentences}
-                  >
-                    <SortableContext
-                      items={visibleSentences.map((item) => item.id)}
-                      strategy={verticalListSortingStrategy}
-                    >
-                  {visibleSentences.map((sentence) => {
-                    const index = sentences.findIndex((item) => item.id === sentence.id);
-                    const active = index === playingIndex;
-                    const status = sentence.generation_status;
-                    const isProcessing = ['generating', 'loading_model'].includes(status || '');
-                    const statusLabel =
-                      active && isPlaying
-                        ? '正在播放'
-                        : status === 'completed'
-                          ? '已完成'
-                          : status === 'loading_model'
-                            ? '正在加载模型'
-                            : status === 'generating'
-                              ? '正在生成'
-                              : status === 'failed'
-                                ? '生成失败'
-                                : sentence.generation_id
-                                  ? '等待状态'
-                                  : '未处理';
-                    return (
-                      <SortableSentenceRow
-                        id={sentence.id}
-                        disabled={sentenceFilter !== 'all' || isProcessing || editingSentenceIds.has(sentence.id)}
-                        rowRef={(el) => {
-                          if (el) rowRefs.current.set(sentence.id, el);
-                          else rowRefs.current.delete(sentence.id);
-                        }}
-                        key={sentence.id}
-                        onClick={() => status === 'completed' && playFrom(index)}
-                        className={cn(
-                          'w-full grid grid-cols-[24px_24px_42px_minmax(0,1fr)_auto] gap-3 text-left rounded-lg px-3 py-3 border border-transparent transition-colors',
-                          status === 'completed' && 'hover:bg-muted/50 cursor-pointer',
-                          active && 'bg-primary/10 border-primary/40 shadow-sm',
-                        )}
-                      >
-                        <input
-                          type="checkbox"
-                          className="mt-1 h-4 w-4 accent-primary"
-                          checked={selectedSentenceIds.has(sentence.id)}
-                          aria-label={`选择第 ${index + 1} 句`}
-                          onClick={(event) => event.stopPropagation()}
-                          onChange={(event) => {
-                            setSelectedSentenceIds((current) => {
-                              const next = new Set(current);
-                              if (event.target.checked) next.add(sentence.id);
-                              else next.delete(sentence.id);
-                              return next;
-                            });
-                          }}
-                        />
-                        <span className="text-xs text-muted-foreground pt-1 tabular-nums">
-                          {String(index + 1).padStart(3, '0')}
-                        </span>
-                        <span className="min-w-0">
-                          {editingSentenceIds.has(sentence.id) ? (
-                            <span className="block">
-                              <Textarea
-                                value={sentenceDrafts[sentence.id] ?? sentence.text}
-                                className="min-h-20 resize-y leading-6"
-                                autoFocus
-                                onClick={(event) => event.stopPropagation()}
-                                onChange={(event) =>
-                                  setSentenceDrafts((current) => ({
-                                    ...current,
-                                    [sentence.id]: event.target.value,
-                                  }))
-                                }
-                              />
-                              {(sentenceDrafts[sentence.id] ?? sentence.text) !== sentence.text && (
-                                <span className="mt-1 inline-block rounded bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-600">
-                                  未保存
-                                </span>
-                              )}
-                            </span>
-                          ) : (
-                            <span
-                              className={cn('block leading-7', active && 'text-primary font-medium')}
-                            >
-                              {sentence.text}
-                            </span>
-                          )}
-                          {status === 'failed' && sentence.generation_error && (
-                            <span className="block text-xs text-destructive mt-1 line-clamp-2">
-                              {sentence.error_category && `[${sentence.error_category}] `}{sentence.generation_error}
-                            </span>
-                          )}
-                          {!!sentence.generation_id && (
-                            <span className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
-                              <span>时长：{formatDuration(sentence.duration)}</span>
-                              <span>声音：{sentence.profile_name || '—'}</span>
-                              <span>
-                                模型：{sentence.engine || '—'}
-                                {sentence.model_size ? ` ${sentence.model_size}` : ''}
-                              </span>
-                              <span
-                                className="max-w-full truncate"
-                                title={
-                                  sentence.audio_path ||
-                                  (sentence.generation_status === 'completed'
-                                    ? `generations\\${sentence.generation_id}.wav`
-                                    : '尚未生成文件')
-                                }
-                              >
-                                文件：
-                                {sentence.audio_path ||
-                                  (sentence.generation_status === 'completed'
-                                    ? `generations\\${sentence.generation_id}.wav`
-                                    : '尚未生成')}
-                              </span>
-                            </span>
-                          )}
-                          {(sentence.audio_takes?.length ?? 0) > 0 && (
-                            <span className="mt-2 block space-y-1 rounded-md border bg-muted/20 p-2">
-                              <span className="block text-[11px] font-medium text-muted-foreground">
-                                已保留 {sentence.audio_takes.length} 条语音
-                              </span>
-                              {sentence.audio_takes.map((take, takeIndex) => (
-                                <span
-                                  key={take.generation_id}
-                                  className={cn(
-                                    'flex items-center gap-2 rounded px-2 py-1 text-[11px]',
-                                    take.selected && 'bg-primary/10 text-primary',
-                                  )}
-                                  onClick={(event) => event.stopPropagation()}
-                                >
-                                  <span className="min-w-0 flex-1 truncate">
-                                    版本 {takeIndex + 1} · {take.profile_name || '未知声音'} · {take.engine || '—'}
-                                    {take.model_size ? ` ${take.model_size}` : ''} · {formatDuration(take.duration)}
-                                  </span>
-                                  {take.selected && <span className="font-medium">当前</span>}
-                                  {take.status === 'completed' && (
-                                    <Button size="icon" variant="ghost" className="h-6 w-6" title="试听这条语音" onClick={() => playAudioTake(sentence, take.generation_id)}>
-                                      <Play className="h-3 w-3" />
-                                    </Button>
-                                  )}
-                                  {!take.selected && take.status === 'completed' && (
-                                    <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={() => void selectAudioTake(sentence, take.generation_id)}>
-                                      设为当前
-                                    </Button>
-                                  )}
-                                  <Button size="icon" variant="ghost" className="h-6 w-6 text-destructive" title="删除这条语音" onClick={() => void deleteAudioTake(sentence, take.generation_id)}>
-                                    <Trash2 className="h-3 w-3" />
-                                  </Button>
-                                </span>
-                              ))}
-                            </span>
-                          )}
-                        </span>
-                        <span className="min-w-32 flex justify-end items-center gap-2 text-xs text-muted-foreground">
-                          {active && isPlaying ? (
-                            <Volume2 className="h-4 w-4 text-primary animate-pulse" />
-                          ) : status === 'completed' ? (
-                            <Play className="h-4 w-4" />
-                          ) : isProcessing ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                          ) : status === 'failed' ? (
-                            <CircleAlert className="h-4 w-4 text-destructive" />
-                          ) : null}
-                          <span
-                            className={cn(
-                              'rounded-full border px-2.5 py-1 whitespace-nowrap font-medium',
-                              !sentence.generation_id && 'bg-muted/50',
-                              isProcessing && 'border-blue-500/40 bg-blue-500/10 text-blue-500',
-                              status === 'completed' &&
-                                'border-emerald-500/40 bg-emerald-500/10 text-emerald-500',
-                              status === 'failed' &&
-                                'border-destructive/40 bg-destructive/10 text-destructive',
-                              active && isPlaying && 'border-primary/40 bg-primary/10 text-primary',
-                            )}
-                          >
-                            {statusLabel}
-                          </span>
-                          {(status === 'completed' || status === 'failed') && (
-                            <Button
-                              size="icon"
-                              variant="ghost"
-                              className="h-7 w-7"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                if (status === 'completed') regenerateSentence(sentence);
-                                else generateSentence(sentence);
-                              }}
-                              title={status === 'completed' ? '重新生成这句话' : '重试这句话'}
-                            >
-                              <RotateCcw className="h-3.5 w-3.5" />
-                            </Button>
-                          )}
-                          {editingSentenceIds.has(sentence.id) ? (
-                            <>
-                              <Button
-                                size="icon"
-                                variant="ghost"
-                                className="h-7 w-7 text-emerald-500"
-                                title="保存修改"
-                                onClick={async (e) => {
-                                  e.stopPropagation();
-                                  if (await saveSentence(sentence)) await refresh();
-                                }}
-                              >
-                                <Check className="h-3.5 w-3.5" />
-                              </Button>
-                              <Button
-                                size="icon"
-                                variant="ghost"
-                                className="h-7 w-7"
-                                title="取消修改"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  cancelEditing(sentence.id);
-                                }}
-                              >
-                                <X className="h-3.5 w-3.5" />
-                              </Button>
-                            </>
-                          ) : (
-                            <Button
-                              size="icon"
-                              variant="ghost"
-                              className="h-7 w-7"
-                              disabled={isProcessing}
-                              title="行内编辑句子"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                startEditing([sentence]);
-                              }}
-                            >
-                              <Pencil className="h-3.5 w-3.5" />
-                            </Button>
-                          )}
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            className="h-7 w-7"
-                            title="在此句后新增"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              addSentence(index + 1);
-                            }}
-                          >
-                            <Plus className="h-3.5 w-3.5" />
-                          </Button>
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            className="h-7 w-7 text-destructive"
-                            disabled={isProcessing}
-                            title="删除句子"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              deleteSentence(sentence);
-                            }}
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </Button>
-                        </span>
-                      </SortableSentenceRow>
-                    );
-                  })}
-                    </SortableContext>
-                  </DndContext>
-                </div>
-              </div>
-            )}
-          </>
-        )}
-      </main>
-
-      <aside className="min-h-0 overflow-y-auto border-l pl-5 space-y-5">
-        <div>
-          <h3 className="font-semibold mb-1">生成设置</h3>
-          <p className="text-xs text-muted-foreground">每句话将生成一条独立语音</p>
-        </div>
-        <div className="space-y-2">
-          <Label>声音</Label>
-          <Select value={profileId} onValueChange={setProfileId}>
-            <SelectTrigger>
-              <SelectValue placeholder="选择声音" />
-            </SelectTrigger>
-            <SelectContent>
-              {compatibleProfiles.map((p) => (
-                <SelectItem key={p.id} value={p.id}>
-                  {p.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="space-y-2">
-          <Label>引擎与模型</Label>
-          <Select value={engineValue} onValueChange={setEngineValue}>
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {ENGINES.map(([value, label]) => (
-                <SelectItem key={value} value={value}>
-                  {label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="space-y-2">
-          <Label>语言</Label>
-          <Select value={language} onValueChange={(v) => setLanguage(v as LanguageCode)}>
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {getLanguageOptionsForEngine(engine || 'qwen').map((item) => (
-                <SelectItem key={item.value} value={item.value}>
-                  {ALL_LANGUAGES[item.value]}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="space-y-2">
-          <Label>批量性能模式</Label>
-          <Select value={performanceMode} onValueChange={(value) => setPerformanceMode(value as 'stable' | 'fast')}>
-            <SelectTrigger><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="stable">稳定模式（逐句提交）</SelectItem>
-              <SelectItem value="fast">快速模式（提前排队）</SelectItem>
-            </SelectContent>
-          </Select>
-          <p className="text-[11px] text-muted-foreground">
-            快速模式只减少句间等待，不启用曾导致错误的 CUDA Graph。
-          </p>
-        </div>
-        {engine === 'qwen_custom_voice' && (
-          <div className="space-y-2">
-            <Label>演绎指令</Label>
-            <Textarea
-              value={instruct}
-              onChange={(e) => setInstruct(e.target.value)}
-              placeholder="例如：温暖、平静地讲述"
-              className="min-h-20"
-            />
-          </div>
-        )}
-        {!!sentences.length && (
-          <div className="rounded-lg bg-muted/40 p-3 text-sm space-y-1">
-            <div className="flex justify-between">
-              <span>总计</span>
-              <span>{sentences.length} 句</span>
-            </div>
-            <div className="flex justify-between text-emerald-500">
-              <span>已完成</span>
-              <span>{completedCount}</span>
-            </div>
-            <div className="flex justify-between">
-              <span>生成中</span>
-              <span>{activeCount}</span>
-            </div>
-            {failedCount > 0 && (
-              <div className="flex justify-between text-destructive">
-                <span>失败</span>
-                <span>{failedCount}</span>
-              </div>
-            )}
-          </div>
-        )}
-        <Button
-          className="w-full"
-          disabled={!sentences.length || !profileId || generating}
-          onClick={() => generateAll(false)}
-        >
-          {generating ? (
-            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-          ) : (
-            <Volume2 className="h-4 w-4 mr-2" />
+              )}
+            </>
           )}
-          生成全部待处理句子
-        </Button>
-        {(generating || bookActiveCount > 0) && (
-          <Button
-            variant="destructive"
-            className="w-full"
-            disabled={stopping}
-            onClick={stopGeneration}
-          >
-            {stopping ? (
-              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-            ) : (
-              <Square className="h-4 w-4 mr-2" />
-            )}
-            {stopping
-              ? '正在中止整本书…'
-              : `中止整本书生成${bookActiveCount ? `（${bookActiveCount}）` : ''}`}
-          </Button>
-        )}
-        {failedCount > 0 && (
-          <Button
-            variant="outline"
-            className="w-full"
-            disabled={generating}
-            onClick={() => generateAll(true)}
-          >
-            <RotateCcw className="h-4 w-4 mr-2" />
-            仅重试失败项
-          </Button>
-        )}
-        {!!chapter && completedCount > 0 && (
-          <div className="space-y-2 rounded-lg border p-3">
-            <Label>导出整章</Label>
-            <div className="flex items-center gap-2">
-              <Input
-                type="number"
-                min="0"
-                max="10000"
-                value={exportPauseMs}
-                onChange={(event) => setExportPauseMs(event.target.value)}
-              />
-              <span className="text-xs text-muted-foreground">毫秒停顿</span>
-            </div>
-            <Button
-              className="w-full"
-              variant="outline"
-              disabled={exporting}
-              onClick={async () => {
-                setExporting(true);
-                try {
-                  const blob = await apiClient.exportAudiobookChapter(chapter.id, Number(exportPauseMs) || 0);
-                  await platform.filesystem.saveFile(`${chapter.title || 'chapter'}.wav`, blob, [
-                    { name: 'WAV 音频', extensions: ['wav'] },
-                  ]);
-                  toast({ title: '整章音频已导出' });
-                } catch (error) {
-                  toast({ title: '导出整章失败', description: String(error), variant: 'destructive' });
-                } finally {
-                  setExporting(false);
-                }
-              }}
-            >
-              {exporting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              {exporting ? '正在合并并保存…' : '导出整章 WAV'}
-            </Button>
-          </div>
-        )}
-        {book && (
-          <Button
-            variant="ghost"
-            className="w-full text-destructive"
-            onClick={async () => {
-              if (window.confirm(`删除《${book.title}》？语音历史不会被删除。`)) {
-                await apiClient.deleteAudiobook(book.id);
-                setBookId(null);
-                await refresh();
-              }
-            }}
-          >
-            <Trash2 className="h-4 w-4 mr-2" />
-            删除图书
-          </Button>
-        )}
-      </aside>
+        </main>
+      </div>
 
       {playingIndex >= 0 && currentSentence && (
         <AudiobookPlayer
@@ -1594,6 +1904,18 @@ export function AudiobooksTab() {
         onPlay={() => setIsPlaying(true)}
       />
 
+      <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+        <DialogContent className="fixed left-auto right-0 top-0 h-dvh max-h-dvh w-full max-w-md translate-x-0 translate-y-0 rounded-none flex flex-col">
+          <DialogHeader className="shrink-0">
+            <DialogTitle>声音与生成设置</DialogTitle>
+            <DialogDescription>
+              选择本次生成使用的声音与模型。已保存的语音不会随设置改变。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="min-h-0 overflow-y-auto pr-2">{generationSettings}</div>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={recycleBinOpen} onOpenChange={setRecycleBinOpen}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
@@ -1604,9 +1926,14 @@ export function AudiobooksTab() {
               <p className="py-8 text-center text-sm text-muted-foreground">回收站为空</p>
             ) : (
               deletedSentencesQuery.data.map((item) => (
-                <div key={item.deletion_id} className="flex items-start gap-3 rounded-lg border p-3">
+                <div
+                  key={item.deletion_id}
+                  className="flex items-start gap-3 rounded-lg border p-3"
+                >
                   <div className="min-w-0 flex-1">
-                    <div className="text-xs text-muted-foreground mb-1">原第 {item.position + 1} 句</div>
+                    <div className="text-xs text-muted-foreground mb-1">
+                      原第 {item.position + 1} 句
+                    </div>
                     <div className="text-sm break-words">{item.text}</div>
                   </div>
                   <Button
@@ -1628,7 +1955,9 @@ export function AudiobooksTab() {
             )}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setRecycleBinOpen(false)}>关闭</Button>
+            <Button variant="outline" onClick={() => setRecycleBinOpen(false)}>
+              关闭
+            </Button>
             {!!deletedSentencesQuery.data?.length && (
               <Button
                 onClick={() =>

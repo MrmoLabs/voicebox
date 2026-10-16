@@ -1,4 +1,3 @@
-import { useEffect } from 'react';
 import type { UseFormReturn } from 'react-hook-form';
 import { FormControl } from '@/components/ui/form';
 import {
@@ -46,22 +45,11 @@ const ENGINE_DESCRIPTIONS: Record<string, string> = {
 /** Engines that only support English and should force language to 'en' on select. */
 const ENGLISH_ONLY_ENGINES = new Set(['luxtts', 'chatterbox_turbo']);
 
-/** Engines that support cloned (reference audio) profiles. */
-const CLONING_ENGINES = new Set([
-  'qwen',
-  'luxtts',
-  'chatterbox',
-  'chatterbox_turbo',
-  'tada',
-  'omnivoice',
-]);
-
-/** Engines that synthesise a voice from a written description. */
-export const DESIGN_ENGINES = new Set(['qwen_voice_design']);
-
 function getAvailableOptions(selectedProfile?: VoiceProfileResponse | null) {
-  if (!selectedProfile) return ENGINE_OPTIONS;
-  return ENGINE_OPTIONS.filter((opt) => isProfileCompatibleWithEngine(selectedProfile, opt.engine));
+  // Keep engines discoverable; the form explains the required voice type
+  // before submission instead of silently changing the user's selection.
+  void selectedProfile;
+  return ENGINE_OPTIONS;
 }
 
 function getSelectValue(engine: string, modelSize?: string): string {
@@ -133,14 +121,6 @@ export function EngineModelSelector({ form, compact, selectedProfile }: EngineMo
   const selectValue = getSelectValue(engine, modelSize);
   const availableOptions = getAvailableOptions(selectedProfile);
 
-  const currentEngineAvailable = availableOptions.some((opt) => opt.value === selectValue);
-
-  useEffect(() => {
-    if (!currentEngineAvailable && availableOptions.length > 0) {
-      applyEngineSelection(form, availableOptions[0].value);
-    }
-  }, [availableOptions, currentEngineAvailable, form]);
-
   const itemClass = compact ? 'text-xs text-muted-foreground' : undefined;
   const triggerClass = compact
     ? 'h-8 text-xs bg-card border-border rounded-full hover:bg-background/50 transition-all'
@@ -173,13 +153,4 @@ export function getEngineDescription(engine: string): string {
  * Check if a profile is compatible with the currently selected engine.
  * Useful for UI hints.
  */
-export function isProfileCompatibleWithEngine(
-  profile: VoiceProfileResponse,
-  engine: string,
-): boolean {
-  const voiceType = profile.voice_type || 'cloned';
-  if (voiceType === 'preset') return profile.preset_engine === engine;
-  if (voiceType === 'cloned') return CLONING_ENGINES.has(engine);
-  if (voiceType === 'designed') return DESIGN_ENGINES.has(engine);
-  return true;
-}
+export { isProfileCompatibleWithEngine } from '@/lib/constants/voiceCompatibility';

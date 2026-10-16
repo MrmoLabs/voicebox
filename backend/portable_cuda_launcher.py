@@ -16,6 +16,21 @@ DEPENDENCIES = ROOT / "site-packages"
 PERFORMANCE_DEPENDENCIES = ROOT / "performance-site-packages"
 QWEN_SOURCE = ROOT / "qwen-source"
 
+# Resolve redirected AppData paths before PyTorch creates hashed cache folders.
+# Tauri's Windows environment transport can also double path separators.
+for cache_variable in ("TORCHINDUCTOR_CACHE_DIR", "TRITON_CACHE_DIR"):
+    cache_value = os.environ.get(cache_variable)
+    if cache_value:
+        cache_path = Path(cache_value).expanduser().resolve()
+        cache_path.mkdir(parents=True, exist_ok=True)
+        os.environ[cache_variable] = str(cache_path)
+
+# Triton uses sysconfig's site-packages by default, which differs from this
+# portable layout. Point it at its bundled compiler, headers and import libs.
+bundled_cuda = PERFORMANCE_DEPENDENCIES / "triton" / "backends" / "nvidia"
+if (bundled_cuda / "include" / "cuda.h").is_file():
+    os.environ.setdefault("CUDA_PATH", str(bundled_cuda))
+
 os.environ.setdefault("VOICEBOX_BACKEND_VARIANT", "cuda")
 os.environ.setdefault("VOICEBOX_TTS_OPTIMIZE", "codebook-safe")
 # Voicebox 0.5.1 desktop builds passed these process-wide flags to the
