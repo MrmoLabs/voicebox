@@ -54,7 +54,7 @@ Copy-Tree $backendSite $siteOutput $backendExcludes @("*.pyc", "*.pyo")
 $performanceSite = Join-Path $projectRoot ".venv-perf\Lib\site-packages"
 $performanceOutput = Join-Path $output "performance-site-packages"
 $performanceExcludes = @(
-    "torch", "torchaudio", "torchgen", "functorch", "pip", "__pycache__"
+    "torch", "torchaudio", "pip", "__pycache__"
 ) | ForEach-Object { Join-Path $performanceSite $_ }
 Copy-Tree $performanceSite $performanceOutput $performanceExcludes @("*.pyc", "*.pyo", "*.whl")
 
