@@ -243,12 +243,20 @@
     "discard": "破棄",
     "source": {
       "clone": "オーディオから複製",
-      "builtin": "ビルトインボイス"
+      "builtin": "ビルトインボイス",
+      "design": "声を説明する"
     },
     "builtin": {
       "hint": "あらかじめ用意されたボイスを選択してください。オーディオサンプルは不要です。",
       "badge": "ビルトインボイス",
       "note": "このプロファイルはビルトインボイスを使用しています。作成後はボイスを変更できません。"
+    },
+    "design": {
+      "hint": "欲しい声を普通の言葉で説明してください。音声サンプルは不要です。",
+      "placeholder": "温かくしゃがれた年配の男性の声。ゆっくりしたスコットランド訛りで、少し愉快そうな響き。",
+      "engineNote": "Qwen VoiceDesign を使用",
+      "badge": "設計された声",
+      "note": "このプロファイルは説明から生成した声を使います。説明は作成後に変更できません。"
     },
     "sampleTabs": {
       "upload": "アップロード",
@@ -264,6 +272,7 @@
       "descriptionPlaceholder": "このボイスを説明してください…",
       "language": "言語",
       "referenceText": "リファレンステキスト",
+      "designPrompt": "声の説明",
       "referenceTextPlaceholder": "オーディオで話されている正確なテキストを入力してください…",
       "defaultEngine": "デフォルトエンジン",
       "noPreference": "指定なし",
@@ -316,8 +325,11 @@
       "voiceUpdatedDescription": "「{{name}}」を正常に更新しました。",
       "noVoiceSelected": "ボイスが選択されていません",
       "noVoiceSelectedDescription": "ビルトインボイスを選択してください。",
+      "noDesignPrompt": "説明がありません",
+      "noDesignPromptDescription": "欲しい声を説明してください。",
       "profileCreated": "プロファイルを作成しました",
       "profileCreatedBuiltin": "「{{name}}」をビルトインボイスで作成しました。",
+      "profileCreatedDesigned": "「{{name}}」を声の説明から作成しました。",
       "profileCreatedSample": "「{{name}}」をサンプルで作成しました。",
       "sampleRequired": "オーディオサンプルが必要です",
       "sampleRequiredDescription": "ボイスプロファイルを作成するには、オーディオサンプルを用意してください。",
@@ -410,7 +422,7 @@
     },
     "deleteDialog": {
       "title": "プロファイルを削除",
-      "body": "「{{name}}」を本当に削除しますか? この操作は元に戻せません。",
+      "body": "「{{name}}」を本当に削除しますか? この声で作成したすべての生成(音声ファイルを含む)も削除されます。この操作は元に戻せません。",
       "deleting": "削除中…"
     }
   },
@@ -623,6 +635,12 @@
     "searchNoMatches": "一致する生成が見つかりません",
     "searchNoAvailable": "利用可能な生成がありません",
     "exportAudio": "オーディオをエクスポート",
+    "exportDropdownLabel": "ストーリーをエクスポート",
+    "exportFormats": {
+      "wav": "音声 (WAV)",
+      "mp3": "音声 (MP3)",
+      "m4b": "オーディオブック (M4B、チャプター付き)"
+    },
     "empty": {
       "title": "このストーリーには項目がありません",
       "hint": "下のボックスで音声を生成して項目を追加します"
@@ -650,6 +668,7 @@
       "menu": "操作",
       "play": "再生",
       "exportAudio": "オーディオをエクスポート",
+      "exportAudioMp3": "オーディオをエクスポート (MP3)",
       "exportPackage": "パッケージをエクスポート",
       "applyEffects": "エフェクトを適用",
       "regenerate": "再生成"
@@ -760,8 +779,13 @@
       }
     },
     "general": {
-      "docs": { "title": "ドキュメントを読む" },
-      "discord": { "title": "Discord に参加", "subtitle": "ヘルプやボイスの共有" },
+      "docs": {
+        "title": "ドキュメントを読む"
+      },
+      "discord": {
+        "title": "Discord に参加",
+        "subtitle": "ヘルプやボイスの共有"
+      },
       "serverUrl": {
         "title": "サーバー URL",
         "description": "Voicebox バックエンドサーバーのアドレス。",
@@ -977,6 +1001,21 @@
         "preserveTechnical": {
           "title": "専門用語を保持",
           "description": "コードの識別子、コマンド名、頭字語を発話どおりに保持します。コード入力欄にディクテーションするときに有効にしてください。"
+        },
+        "customEndpoint": {
+          "title": "カスタム LLM エンドポイント (上級)",
+          "description": "リファインとパーソナリティの書き換えを、任意の OpenAI 互換サーバー (llama.cpp、vLLM、LM Studio、LocalAI、Ollama の互換 API、OpenAI API 自体など) に委譲します。空欄のままなら内蔵の Qwen3 を使います。",
+          "endpointLabel": "エンドポイント URL",
+          "endpointPlaceholder": "http://localhost:8090/v1",
+          "modelLabel": "モデル名",
+          "modelPlaceholder": "モデル名 (例: qwen3-4b)",
+          "apiKeyLabel": "API キー",
+          "apiKeyPlaceholder": "API キー (任意)",
+          "apiKeyPlaceholderReplace": "上書きする新しいキーを入力",
+          "apiKeyConfigured": "保存済",
+          "apiKeyClear": "クリア",
+          "statusBuiltin": "上で選んだ内蔵 Qwen3 モデルを使用しています",
+          "statusRemote": "リファインとパーソナリティの書き換えを {{endpoint}} に送信しています"
         }
       },
       "playback": {
@@ -1015,6 +1054,10 @@
           "title": "完全にローカル。",
           "body": "Whisper と整形用 LLM はあなたのハードウェア上で動作します。クラウドもアカウントも不要で、声がマシンの外に出ることはありません。"
         },
+        "remote": {
+          "title": "整形処理はリモート実行中。",
+          "body": "Whisper はハードウェア上で書き起こしを続けますが、整形された文字起こしとパーソナリティ書き換えは {{endpoint}} に送られます。音声そのものはマシンから出ません。"
+        },
         "playAs": {
           "title": "どのボイスでも再生。",
           "body": "クローンしたどのプロファイルでも文字起こしを読み上げできます。"
@@ -1050,7 +1093,7 @@
       },
       "defaultVoice": {
         "title": "デフォルトボイス",
-        "description": "エージェントが特定のプロファイルを指定せず、クライアントごとのバインディングもない状態で voicebox.speak を呼び出したときに使われます。",
+        "description": "エージェントが特定のプロファイルを指定せず、クライアントごとのバインディングもない状態で voicebox_speak を呼び出したときに使われます。",
         "label": "デフォルトの再生ボイス",
         "labelHint": "キャプチャタブの「ボイスで再生」ドロップダウンと共有 — パッシブ再生用に 1 つのデフォルトボイスを設定します。",
         "none": "(なし)"
@@ -1128,7 +1171,7 @@
         "switchCpu": "CPU への切り替えに失敗しました",
         "deleteCuda": "CUDA バックエンドの削除に失敗しました"
       },
-      "footer": "Voicebox はシステムで利用可能な最適な GPU を自動で検出し使用します。Apple Silicon Mac では、MLX バックエンドが Metal Performance Shaders(MPS)を介して Neural Engine と GPU 上でネイティブに動作し、追加のセットアップは不要です。NVIDIA GPU 搭載の Windows および Linux では、オプションの CUDA バックエンドをダウンロードしてハードウェアアクセラレーションによる推論が可能です。AMD ROCm、Intel XPU、DirectML も PyTorch を通じて利用可能な環境でサポートされます。GPU が検出されない場合、Voicebox は CPU にフォールバックし、すべてのエンジンはそのまま動作しますが速度は低下します。"
+      "footer": "Voicebox はシステムで利用可能な最適な GPU を自動で検出し使用します。Apple Silicon Mac では、MLX バックエンドが Metal Performance Shaders(MPS)を介して Neural Engine と GPU 上でネイティブに動作し、追加のセットアップは不要です。Windows および Linux では、オプションの CUDA(NVIDIA)または ROCm(AMD)バックエンドをダウンロードしてハードウェアアクセラレーションによる推論が可能です。Intel XPU、DirectML も PyTorch を通じて利用可能な環境でサポートされます。GPU が検出されない場合、Voicebox は CPU にフォールバックし、すべてのエンジンはそのまま動作しますが速度は低下します。"
     },
     "logs": {
       "title": "サーバーログ",

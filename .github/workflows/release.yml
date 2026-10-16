@@ -85,6 +85,7 @@ jobs:
           pip install -r backend/requirements.txt
           pip install --no-deps chatterbox-tts
           pip install --no-deps hume-tada
+          pip install --no-deps omnivoice
 
       - name: Install MLX dependencies (Apple Silicon only)
         if: matrix.backend == 'mlx'
@@ -179,8 +180,11 @@ jobs:
         id: changelog
         shell: bash
         run: |
-          # Get the version from the tag (strip leading 'v')
-          VERSION="${GITHUB_REF_NAME#v}"
+          # Use the version tauri-action resolves (tauri.conf.json). On a tag
+          # push it equals the tag minus 'v'; under workflow_dispatch
+          # GITHUB_REF_NAME is a branch name (e.g. release/0.6) whose slash
+          # breaks the sed address below.
+          VERSION="$(jq -r '.version' tauri/src-tauri/tauri.conf.json)"
 
           # Extract the section for this version from CHANGELOG.md
           # Matches from "## [X.Y.Z]" until the next "## [" heading
@@ -290,6 +294,7 @@ jobs:
           pip install -r backend/requirements.txt
           pip install --no-deps chatterbox-tts
           pip install --no-deps hume-tada
+          pip install --no-deps omnivoice
 
       - name: Install PyTorch with CUDA 12.8
         run: |
@@ -317,6 +322,7 @@ jobs:
           python scripts/package_cuda.py \
             backend/dist/voicebox-server-cuda/ \
             --output release-assets/ \
+            --platform windows-x86_64 \
             --cuda-libs-version cu128-v1 \
             --torch-compat ">=2.7.0,<2.11.0"
 
@@ -325,10 +331,10 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            release-assets/voicebox-server-cuda.tar.gz
-            release-assets/voicebox-server-cuda.tar.gz.sha256
-            release-assets/cuda-libs-cu128-v1.tar.gz
-            release-assets/cuda-libs-cu128-v1.tar.gz.sha256
+            release-assets/voicebox-server-cuda-windows-x86_64.tar.gz
+            release-assets/voicebox-server-cuda-windows-x86_64.tar.gz.sha256
+            release-assets/cuda-libs-windows-x86_64-cu128-v1.tar.gz
+            release-assets/cuda-libs-windows-x86_64-cu128-v1.tar.gz.sha256
             release-assets/cuda-libs.json
           draft: true
         env:
@@ -340,6 +346,94 @@ jobs:
           name: voicebox-server-cuda-windows
           path: backend/dist/voicebox-server-cuda/
           retention-days: 7
+
+  build-gpu-linux:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - backend: cuda
+            torch_index: https://download.pytorch.org/whl/cu128
+            torch_attr: cuda
+            libs_version: cu128-v1
+            torch_compat: ">=2.7.0,<2.11.0"
+            # Ampere through Blackwell; +PTX keeps forward-compat for newer arches.
+            arch_list: "8.0;8.6;8.9;9.0;12.0+PTX"
+          - backend: rocm
+            torch_index: https://download.pytorch.org/whl/rocm7.2
+            torch_attr: hip
+            libs_version: rocm7.2-v1
+            torch_compat: ">=2.12.0,<2.13.0"
+            arch_list: ""
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Free up disk space
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
+        with:
+          tool-cache: true
+          large-packages: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install GPU PyTorch (Linux) first so requirements see it satisfied
+        # The Linux GPU runtime ships inside the torch wheels (for ROCm:
+        # torch/lib/*.so + rocBLAS/hipBLASLt/aotriton kernel data — unlike
+        # Windows, which uses separate rocm_sdk wheels). Installing it before
+        # requirements.txt keeps pip from first pulling the default torch stack
+        # that requirements.txt's unqualified torch would otherwise resolve —
+        # avoiding wasted downloads and disk pressure.
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          pip install torch torchaudio \
+            --index-url ${{ matrix.torch_index }}
+
+      - name: Install remaining Python dependencies
+        run: |
+          pip install -r backend/requirements.txt
+          pip install --no-deps chatterbox-tts
+          pip install --no-deps hume-tada
+
+      - name: Verify GPU support in torch
+        run: python -c "import torch; assert torch.version.${{ matrix.torch_attr }}, 'torch is not a ${{ matrix.backend }} build'; print(torch.__version__)"
+
+      - name: Build GPU server binary (onedir)
+        working-directory: backend
+        env:
+          TORCH_CUDA_ARCH_LIST: ${{ matrix.arch_list }}
+        run: python build_binary.py --${{ matrix.backend }}
+
+      - name: Package into server core + GPU libs archives
+        run: |
+          python scripts/package_${{ matrix.backend }}.py \
+            backend/dist/voicebox-server-${{ matrix.backend }}/ \
+            --output release-assets/ \
+            --platform linux-x86_64 \
+            --${{ matrix.backend }}-libs-version ${{ matrix.libs_version }} \
+            --torch-compat "${{ matrix.torch_compat }}"
+
+      - name: Upload archives to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release-assets/voicebox-server-${{ matrix.backend }}-linux-x86_64.tar.gz
+            release-assets/voicebox-server-${{ matrix.backend }}-linux-x86_64.tar.gz.sha256
+            release-assets/${{ matrix.backend }}-libs-linux-x86_64-${{ matrix.libs_version }}.tar.gz
+            release-assets/${{ matrix.backend }}-libs-linux-x86_64-${{ matrix.libs_version }}.tar.gz.sha256
+          draft: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build-rocm-windows:
     runs-on: windows-latest
@@ -363,6 +457,7 @@ jobs:
           pip install -r backend/requirements.txt
           pip install --no-deps chatterbox-tts
           pip install --no-deps hume-tada
+          pip install --no-deps omnivoice
 
       - name: Build ROCm server binary (onedir)
         shell: bash
@@ -378,6 +473,7 @@ jobs:
           python scripts/package_rocm.py \
             backend/dist/voicebox-server-rocm/ \
             --output release-assets/ \
+            --platform windows-x86_64 \
             --rocm-libs-version rocm7.2-v1 \
             --torch-compat ">=2.9.0,<2.10.0"
 
@@ -386,10 +482,10 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            release-assets/voicebox-server-rocm.tar.gz
-            release-assets/voicebox-server-rocm.tar.gz.sha256
-            release-assets/rocm-libs-rocm7.2-v1.tar.gz
-            release-assets/rocm-libs-rocm7.2-v1.tar.gz.sha256
+            release-assets/voicebox-server-rocm-windows-x86_64.tar.gz
+            release-assets/voicebox-server-rocm-windows-x86_64.tar.gz.sha256
+            release-assets/rocm-libs-windows-x86_64-rocm7.2-v1.tar.gz
+            release-assets/rocm-libs-windows-x86_64-rocm7.2-v1.tar.gz.sha256
             release-assets/rocm-libs.json
           draft: true
         env:

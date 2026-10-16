@@ -8,11 +8,16 @@ sqlalchemy>=2.0.0
 alembic>=1.13.0
 
 # ML models
-torch>=2.2.0
+# 2.5 is the first release with torch.nn.Buffer, which the vendored Higgs
+# Audio V2 codec uses (backend/vendor/higgs_audio_v2_tokenizer). The old >=2.2
+# floor was already well below what the CUDA/ROCm install paths and the
+# transformers 4.57 workarounds actually run against.
+torch>=2.5.0
 transformers>=4.36.0,<=4.57.6
 accelerate>=0.26.0
 huggingface_hub>=0.20.0
-qwen-tts>=0.0.5
+# >=0.1.1 for Qwen3TTSModel.generate_voice_design (the qwen_voice_design engine)
+qwen-tts>=0.1.1
 
 # LuxTTS (voice cloning engine)
 # piper-phonemize needs custom index (no PyPI wheels)
@@ -40,6 +45,16 @@ pyloudnorm
 # provides the only class TADA uses: Snake1d.)
 torchaudio
 
+# OmniVoice sub-dependencies (omnivoice itself is installed --no-deps
+# in the setup script because it requires transformers>=5.3, while several
+# engine workarounds here depend on transformers 4.57.x internals. The one
+# class it needs from 5.x — HiggsAudioV2TokenizerModel — is vendored under
+# backend/vendor/. Same treatment mlx-lm / mlx-audio already get.
+# Its remaining runtime deps (torch, torchaudio, transformers, accelerate,
+# numpy, soundfile, librosa) are all listed elsewhere in this file; gradio,
+# tensorboardX and webdataset are demo/training-only and deliberately skipped.
+pydub
+
 # Kokoro TTS (lightweight 82M-param engine)
 kokoro>=0.9.4
 misaki[en,ja,zh]>=0.9.4
@@ -57,14 +72,24 @@ audioop-lts>=0.2.1; python_version >= "3.13"
 librosa>=0.10.0
 soundfile>=0.12.0
 numpy>=1.24.0,<2.0
-numba>=0.60.0,<0.61.0
-pedalboard>=0.9.0
+# numba 0.60.x ships no cp313 wheel, so on Python 3.13 pip falls back to a
+# source build that refuses to compile ("only versions >=3.9,<3.13 are
+# supported"). 0.61 is the first release with Python 3.13 support. The
+# <0.61 cap (38bf96f) was about release-CI wheel availability on 3.12, so
+# keep it there and relax it only where it makes installation impossible.
+numba>=0.60.0,<0.61.0; python_version < "3.13"
+numba>=0.61.0; python_version >= "3.13"
+# pedalboard>=0.9.21 ships a Linux wheel with AVX-512 (zmm) instructions baked
+# into its native extension, which SIGILLs on import on any CPU without
+# AVX-512 (e.g. Zen 2/3, pre-Ice-Lake Intel). Pin below the regression until
+# upstream fixes it: https://github.com/spotify/pedalboard/issues/454
+pedalboard>=0.9.0,<0.9.21
 
 # HTTP client (for CUDA backend download)
 httpx>=0.27.0
 
 # MCP server (Model Context Protocol) — lets local AI agents call
-# voicebox.speak / .transcribe / .list_captures / .list_profiles
+# voicebox_speak / voicebox_transcribe / voicebox_list_captures / voicebox_list_profiles
 fastmcp>=3.0,<4.0
 sse-starlette>=2.0
 

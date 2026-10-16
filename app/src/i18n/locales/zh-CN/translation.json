@@ -244,12 +244,20 @@
     "discard": "丢弃",
     "source": {
       "clone": "从音频克隆",
-      "builtin": "内置声音"
+      "builtin": "内置声音",
+      "design": "描述声音"
     },
     "builtin": {
       "hint": "选择一个预建的声音。这些不需要音频样本。",
       "badge": "内置声音",
       "note": "此档案使用内置声音。创建后声音无法更改。"
+    },
+    "design": {
+      "hint": "用日常语言描述你想要的声音，无需音频样本。",
+      "placeholder": "一位声音温暖沙哑的年长男性，带着缓慢的苏格兰口音和一丝笑意。",
+      "engineNote": "使用 Qwen VoiceDesign",
+      "badge": "设计的声音",
+      "note": "此配置使用描述生成的声音。创建后描述不可更改。"
     },
     "sampleTabs": {
       "upload": "上传",
@@ -265,6 +273,7 @@
       "descriptionPlaceholder": "描述此声音……",
       "language": "语言",
       "referenceText": "参考文本",
+      "designPrompt": "声音描述",
       "referenceTextPlaceholder": "输入音频中所说的准确文字……",
       "defaultEngine": "默认引擎",
       "noPreference": "无偏好",
@@ -317,8 +326,11 @@
       "voiceUpdatedDescription": "\"{{name}}\" 已成功更新。",
       "noVoiceSelected": "未选择声音",
       "noVoiceSelectedDescription": "请选择内置声音。",
+      "noDesignPrompt": "未填写描述",
+      "noDesignPromptDescription": "请描述你想要的声音。",
       "profileCreated": "档案已创建",
       "profileCreatedBuiltin": "\"{{name}}\" 已使用内置声音创建。",
+      "profileCreatedDesigned": "“{{name}}”已根据声音描述创建。",
       "profileCreatedSample": "\"{{name}}\" 已使用样本创建。",
       "sampleRequired": "需要音频样本",
       "sampleRequiredDescription": "请提供音频样本以创建声音档案。",
@@ -411,7 +423,7 @@
     },
     "deleteDialog": {
       "title": "删除声音档案",
-      "body": "确定要删除 \"{{name}}\" 吗?此操作不可撤销。",
+      "body": "确定要删除 \"{{name}}\" 吗?使用此声音创建的所有生成(包括其音频文件)也将被删除。此操作不可撤销。",
       "deleting": "删除中…"
     }
   },
@@ -624,6 +636,12 @@
     "searchNoMatches": "未找到匹配的生成",
     "searchNoAvailable": "暂无可用的生成",
     "exportAudio": "导出音频",
+    "exportDropdownLabel": "导出故事为",
+    "exportFormats": {
+      "wav": "音频 (WAV)",
+      "mp3": "音频 (MP3)",
+      "m4b": "有声书 (M4B，含章节)"
+    },
     "empty": {
       "title": "此故事暂无项目",
       "hint": "使用下方输入框生成语音以添加项目"
@@ -651,6 +669,7 @@
       "menu": "操作",
       "play": "播放",
       "exportAudio": "导出音频",
+      "exportAudioMp3": "导出音频 (MP3)",
       "exportPackage": "导出包",
       "applyEffects": "应用效果",
       "regenerate": "重新生成"
@@ -761,8 +780,13 @@
       }
     },
     "general": {
-      "docs": { "title": "阅读文档" },
-      "discord": { "title": "加入 Discord", "subtitle": "获取帮助 & 分享声音" },
+      "docs": {
+        "title": "阅读文档"
+      },
+      "discord": {
+        "title": "加入 Discord",
+        "subtitle": "获取帮助 & 分享声音"
+      },
       "serverUrl": {
         "title": "服务器 URL",
         "description": "Voicebox 后端服务器的地址。",
@@ -1051,7 +1075,7 @@
       },
       "defaultVoice": {
         "title": "默认声音",
-        "description": "当代理调用 voicebox.speak 但未指定具体档案、且没有按客户端绑定时使用。",
+        "description": "当代理调用 voicebox_speak 但未指定具体档案、且没有按客户端绑定时使用。",
         "label": "默认播放声音",
         "labelHint": "与「捕获」标签页的「播放为」下拉菜单共享——被动播放的统一默认声音。",
         "none": "(无)"
@@ -1129,7 +1153,7 @@
         "switchCpu": "切换到 CPU 失败",
         "deleteCuda": "删除 CUDA 后端失败"
       },
-      "footer": "Voicebox 会自动检测并使用系统上可用的最佳 GPU。在 Apple Silicon Mac 上,MLX 后端通过 Metal Performance Shaders (MPS) 在神经引擎和 GPU 上原生运行,无需额外设置。在配备 NVIDIA GPU 的 Windows 和 Linux 上,您可以下载可选的 CUDA 后端以获得硬件加速推理。AMD ROCm、Intel XPU 和 DirectML 也通过 PyTorch 获得支持。未检测到 GPU 时,Voicebox 会退回到 CPU——所有引擎仍可工作,只是速度较慢。"
+      "footer": "Voicebox 会自动检测并使用系统上可用的最佳 GPU。在 Apple Silicon Mac 上,MLX 后端通过 Metal Performance Shaders (MPS) 在神经引擎和 GPU 上原生运行,无需额外设置。在 Windows 和 Linux 上,您可以下载可选的 CUDA (NVIDIA) 或 ROCm (AMD) 后端以获得硬件加速推理。Intel XPU 和 DirectML 也通过 PyTorch 获得支持。未检测到 GPU 时,Voicebox 会退回到 CPU——所有引擎仍可工作,只是速度较慢。"
     },
     "logs": {
       "title": "服务器日志",

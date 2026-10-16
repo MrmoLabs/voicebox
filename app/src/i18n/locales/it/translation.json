@@ -243,12 +243,20 @@
     "discard": "Scarta",
     "source": {
       "clone": "Clona da audio",
-      "builtin": "Voce integrata"
+      "builtin": "Voce integrata",
+      "design": "Descrivi una voce"
     },
     "builtin": {
       "hint": "Scegli una voce predefinita. Queste non richiedono un campione audio.",
       "badge": "Voce integrata",
       "note": "Questo profilo utilizza una voce integrata. La voce non può essere modificata dopo la creazione."
+    },
+    "design": {
+      "hint": "Descrivi la voce che vuoi in linguaggio naturale. Non serve un campione audio.",
+      "placeholder": "Un uomo anziano dalla voce calda e roca, con una lenta cadenza scozzese e un pizzico di ironia.",
+      "engineNote": "Usa Qwen VoiceDesign",
+      "badge": "Voce progettata",
+      "note": "Questo profilo usa una voce descritta. La descrizione non può essere modificata dopo la creazione."
     },
     "sampleTabs": {
       "upload": "Carica",
@@ -264,6 +272,7 @@
       "descriptionPlaceholder": "Descrivi questa voce…",
       "language": "Lingua",
       "referenceText": "Testo di riferimento",
+      "designPrompt": "Descrizione della voce",
       "referenceTextPlaceholder": "Inserisci il testo esatto pronunciato nell'audio…",
       "defaultEngine": "Motore predefinito",
       "noPreference": "Nessuna preferenza",
@@ -316,8 +325,11 @@
       "voiceUpdatedDescription": "\"{{name}}\" è stata aggiornata con successo.",
       "noVoiceSelected": "Nessuna voce selezionata",
       "noVoiceSelectedDescription": "Seleziona una voce integrata.",
+      "noDesignPrompt": "Nessuna descrizione fornita",
+      "noDesignPromptDescription": "Descrivi la voce che desideri.",
       "profileCreated": "Profilo creato",
       "profileCreatedBuiltin": "\"{{name}}\" è stato creato con una voce integrata.",
+      "profileCreatedDesigned": "\"{{name}}\" è stato creato da una descrizione vocale.",
       "profileCreatedSample": "\"{{name}}\" è stato creato con un campione.",
       "sampleRequired": "Campione audio richiesto",
       "sampleRequiredDescription": "Fornisci un campione audio per creare il profilo vocale.",
@@ -379,7 +391,7 @@
       "play": "Riproduci campione",
       "pause": "Pausa campione",
       "stop": "Interrompi",
-            "stopAria": "Interrompi riproduzione",
+      "stopAria": "Interrompi riproduzione",
       "position": "Posizione riproduzione campione",
       "positionValue": "{{current}} di {{total}}"
     },
@@ -410,7 +422,7 @@
     },
     "deleteDialog": {
       "title": "Elimina profilo",
-      "body": "Sei sicuro di voler eliminare \"{{name}}\"? Questa azione non può essere annullata.",
+      "body": "Sei sicuro di voler eliminare \"{{name}}\"? Verranno eliminate anche tutte le generazioni create con questa voce, inclusi i relativi file audio. Questa azione non può essere annullata.",
       "deleting": "Eliminazione in corso…"
     }
   },
@@ -623,6 +635,12 @@
     "searchNoMatches": "Nessuna generazione corrispondente trovata",
     "searchNoAvailable": "Nessuna generazione disponibile",
     "exportAudio": "Esporta audio",
+    "exportDropdownLabel": "Esporta storia come",
+    "exportFormats": {
+      "wav": "Audio (WAV)",
+      "mp3": "Audio (MP3)",
+      "m4b": "Audiolibro (M4B, capitoli)"
+    },
     "empty": {
       "title": "Nessun elemento in questa storia",
       "hint": "Genera del testo parlato utilizzando la casella sottostante per aggiungere elementi"
@@ -650,6 +668,7 @@
       "menu": "Azioni",
       "play": "Riproduci",
       "exportAudio": "Esporta audio",
+      "exportAudioMp3": "Esporta audio (MP3)",
       "exportPackage": "Esporta pacchetto",
       "applyEffects": "Applica effetti",
       "regenerate": "Rigenera"
@@ -1055,7 +1074,7 @@
       },
       "defaultVoice": {
         "title": "Voce predefinita",
-        "description": "Utilizzata quando un agente chiama voicebox.speak senza specificare un profilo e non ha un'associazione per singolo client.",
+        "description": "Utilizzata quando un agente chiama voicebox_speak senza specificare un profilo e non ha un'associazione per singolo client.",
         "label": "Voce di riproduzione predefinita",
         "labelHint": "Condivisa con il menu a discesa 'Riproduci come voce' della scheda Acquisizioni — una sola voce predefinita per la riproduzione passiva.",
         "none": "(nessuna)"
@@ -1124,7 +1143,8 @@
         "title": "Passa al backend CPU",
         "description": "Disabilita l'accelerazione GPU. Potrai scaricare nuovamente il backend GPU in un secondo momento.",
         "button": "Passa a CPU"
-      },      "remove": {
+      },
+      "remove": {
         "title": "Rimuovi il backend CUDA",
         "description": "Elimina il file binario CUDA scaricato per liberare spazio sul disco.",
         "button": "Rimuovi"
@@ -1137,7 +1157,7 @@
         "deleteCuda": "Impossibile eliminare il backend CUDA",
         "deleteRocm": "Impossibile eliminare il backend ROCm"
       },
-      "footer": "Voicebox rileva e utilizza automaticamente la migliore GPU disponibile sul tuo sistema. Sui Mac con chip Apple Silicon, il backend MLX viene eseguito nativamente sul Neural Engine e sulla GPU tramite Metal Performance Shaders (MPS), senza richiedere alcuna configurazione aggiuntiva. Su Windows, puoi scaricare i backend opzionali CUDA (NVIDIA) o ROCm (AMD) per l'inferenza con accelerazione hardware. Dove disponibili tramite PyTorch, sono supportati anche Intel XPU e DirectML. Quando non viene rilevata alcuna GPU, Voicebox si affida alla CPU — tutti i motori continuano a funzionare, solo più lentamente.",
+      "footer": "Voicebox rileva e utilizza automaticamente la migliore GPU disponibile sul tuo sistema. Sui Mac con chip Apple Silicon, il backend MLX viene eseguito nativamente sul Neural Engine e sulla GPU tramite Metal Performance Shaders (MPS), senza richiedere alcuna configurazione aggiuntiva. Su Windows e Linux, puoi scaricare i backend opzionali CUDA (NVIDIA) o ROCm (AMD) per l'inferenza con accelerazione hardware. Dove disponibili tramite PyTorch, sono supportati anche Intel XPU e DirectML. Quando non viene rilevata alcuna GPU, Voicebox si affida alla CPU — tutti i motori continuano a funzionare, solo più lentamente.",
       "rocm": {
         "title": "Backend AMD ROCm",
         "activeTitle": "Backend ROCm attivo",

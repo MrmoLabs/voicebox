@@ -121,6 +121,8 @@ def build_server(cuda=False, rocm=False):
             "--hidden-import",
             "backend.backends.qwen_custom_voice_backend",
             "--hidden-import",
+            "backend.backends.qwen_voice_design_backend",
+            "--hidden-import",
             "backend.utils.audio",
             "--hidden-import",
             "backend.utils.cache",
@@ -268,6 +270,47 @@ def build_server(cuda=False, rocm=False):
             "torchaudio",
             "--collect-submodules",
             "tada",
+            # OmniVoice — diffusion LM TTS, 600+ languages.
+            "--hidden-import",
+            "backend.backends.omnivoice_backend",
+            # The Higgs Audio V2 codec is vendored from transformers 5.x (we are
+            # capped at 4.57.6). Both the shim and the vendored package are
+            # imported from inside a function, so name them explicitly.
+            "--hidden-import",
+            "backend.utils.transformers5_compat",
+            "--collect-submodules",
+            "backend.vendor",
+            "--hidden-import",
+            "omnivoice",
+            "--hidden-import",
+            "omnivoice.models.omnivoice",
+            "--hidden-import",
+            "omnivoice.utils.audio",
+            "--hidden-import",
+            "omnivoice.utils.text",
+            "--hidden-import",
+            "omnivoice.utils.voice_design",
+            "--hidden-import",
+            "omnivoice.utils.duration",
+            "--hidden-import",
+            "omnivoice.utils.lang_map",
+            # omnivoice/__init__.py calls importlib.metadata.version("omnivoice").
+            # It degrades to "0.0.0" without metadata, but ship it anyway.
+            "--copy-metadata",
+            "omnivoice",
+            # The vendored codec builds its two sub-models through
+            # AutoModel.from_config(), which transformers resolves at runtime —
+            # static analysis cannot see either of them. The parent package is
+            # not enough: the weights live in modeling_dac / modeling_hubert,
+            # which transformers itself imports lazily.
+            "--collect-submodules",
+            "transformers.models.dac",
+            "--collect-submodules",
+            "transformers.models.hubert",
+            # Reference-audio preprocessing (silence trimming) in
+            # omnivoice.utils.audio.
+            "--hidden-import",
+            "pydub",
             # Kokoro 82M — lightweight TTS engine using misaki G2P
             # collect-all is required because transformers introspects .py source
             # files at runtime (e.g. _can_set_attn_implementation opens the class
@@ -351,7 +394,13 @@ def build_server(cuda=False, rocm=False):
             )
         args.extend(gpu_hidden)
 
-    if rocm:
+    if rocm and platform.system() == "Windows":
+        # Windows delivers the ROCm runtime as separate rocm_sdk wheels (there is
+        # no system ROCm install). On Linux the download.pytorch.org/whl/rocm
+        # torch wheels bundle the HIP/MIOpen/rocBLAS .so runtime inside
+        # torch/lib/ directly, so none of the rocm_sdk collection below applies —
+        # PyInstaller's torch hook picks those .so up automatically.
+        #
         # rocm_sdk imports its backend packages dynamically via
         # importlib.import_module(py_package_name), which PyInstaller's
         # static analyzer cannot see. We must collect them explicitly —
@@ -442,6 +491,8 @@ def build_server(cuda=False, rocm=False):
                 "mlx_lm",
                 "--hidden-import",
                 "backend.backends.qwen_llm_backend",
+                "--hidden-import",
+                "backend.backends.chatterbox_mlx_backend",
                 "--collect-submodules",
                 "mlx",
                 "--collect-submodules",

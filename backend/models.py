@@ -2,8 +2,8 @@
 Pydantic models for request/response validation.
 """
 
-from pydantic import BaseModel, Field
-from typing import Optional, List
+from pydantic import BaseModel, Field, model_validator
+from typing import Any, Optional, List
 from datetime import datetime
 
 from .utils.capture_chords import (
@@ -85,7 +85,7 @@ class GenerationRequest(BaseModel):
     seed: Optional[int] = Field(None, ge=0)
     model_size: Optional[str] = Field(default="1.7B", pattern="^(1\\.7B|0\\.6B|1B|3B)$")
     instruct: Optional[str] = Field(None, max_length=500)
-    engine: Optional[str] = Field(default="qwen", pattern="^(qwen|qwen_custom_voice|luxtts|chatterbox|chatterbox_turbo|tada|kokoro)$")
+    engine: Optional[str] = Field(default=None, pattern="^(qwen|qwen_custom_voice|qwen_voice_design|luxtts|chatterbox|chatterbox_turbo|tada|kokoro|omnivoice)$")
     personality: bool = Field(
         default=False,
         description="When true and the profile has a personality prompt, the input text is rewritten in-character before TTS.",
@@ -269,6 +269,38 @@ class CaptureSettingsResponse(BaseModel):
     chord_toggle_to_talk_keys: List[str] = Field(
         default_factory=default_toggle_to_talk_chord
     )
+    custom_llm_endpoint: Optional[str] = None
+    custom_llm_model: Optional[str] = None
+    # Provider credential — write-only. The response reports whether one is
+    # configured but never echoes the value, so the settings API can't be
+    # used to exfiltrate stored keys and the frontend can't rehydrate them
+    # into React state where a browser cache could pick them up.
+    custom_llm_api_key_configured: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def _mask_custom_llm_api_key(cls, data: Any) -> Any:
+        """Replace the raw ``custom_llm_api_key`` with a boolean ``_configured`` flag.
+
+        Runs before field validation so the stored credential is never
+        materialised on a Response instance, even in memory. Accepts both
+        SQLAlchemy ORM rows (``from_attributes=True`` path) and plain dicts
+        so tests that construct the model directly get the same treatment.
+        """
+        if isinstance(data, dict):
+            raw_key = data.pop("custom_llm_api_key", None)
+            data.setdefault("custom_llm_api_key_configured", bool(raw_key))
+            return data
+        # ORM row — build a snapshot dict, drop the secret, and hand the
+        # rest to Pydantic. ``from_attributes`` won't reach the raw
+        # attribute anymore because the returned dict wins.
+        columns = getattr(getattr(data, "__table__", None), "columns", None)
+        if columns is None:
+            return data
+        snapshot = {c.name: getattr(data, c.name, None) for c in columns}
+        raw_key = snapshot.pop("custom_llm_api_key", None)
+        snapshot["custom_llm_api_key_configured"] = bool(raw_key)
+        return snapshot
 
     class Config:
         from_attributes = True
@@ -289,6 +321,9 @@ class CaptureSettingsUpdate(BaseModel):
     hotkey_enabled: Optional[bool] = None
     chord_push_to_talk_keys: Optional[List[str]] = Field(default=None, min_length=1, max_length=6)
     chord_toggle_to_talk_keys: Optional[List[str]] = Field(default=None, min_length=1, max_length=6)
+    custom_llm_endpoint: Optional[str] = None
+    custom_llm_model: Optional[str] = None
+    custom_llm_api_key: Optional[str] = None
 
 
 class GenerationSettingsResponse(BaseModel):
@@ -314,7 +349,7 @@ class GenerationSettingsUpdate(BaseModel):
 
 class MCPClientBindingResponse(BaseModel):
     """Per-MCP-client voice binding — what voice / engine the server should
-    use when a given client_id calls voicebox.speak without args, plus an
+    use when a given client_id calls voicebox_speak without args, plus an
     opt-in personality-rewrite default."""
 
     client_id: str
@@ -322,7 +357,7 @@ class MCPClientBindingResponse(BaseModel):
     profile_id: Optional[str] = None
     default_engine: Optional[str] = Field(
         None,
-        pattern="^(qwen|qwen_custom_voice|luxtts|chatterbox|chatterbox_turbo|tada|kokoro)$",
+        pattern="^(qwen|qwen_custom_voice|qwen_voice_design|luxtts|chatterbox|chatterbox_turbo|tada|kokoro|omnivoice)$",
     )
     default_personality: bool = False
     last_seen_at: Optional[datetime] = None
@@ -341,7 +376,7 @@ class MCPClientBindingUpsert(BaseModel):
     profile_id: Optional[str] = None
     default_engine: Optional[str] = Field(
         None,
-        pattern="^(qwen|qwen_custom_voice|luxtts|chatterbox|chatterbox_turbo|tada|kokoro)$",
+        pattern="^(qwen|qwen_custom_voice|qwen_voice_design|luxtts|chatterbox|chatterbox_turbo|tada|kokoro|omnivoice)$",
     )
     default_personality: bool = False
 
@@ -351,7 +386,7 @@ class MCPClientBindingListResponse(BaseModel):
 
 
 class SpeakRequest(BaseModel):
-    """Body for POST /speak — non-MCP REST surface that mirrors voicebox.speak."""
+    """Body for POST /speak — non-MCP REST surface that mirrors voicebox_speak."""
 
     text: str = Field(..., min_length=1, max_length=10000)
     profile: Optional[str] = Field(
@@ -360,7 +395,7 @@ class SpeakRequest(BaseModel):
     )
     engine: Optional[str] = Field(
         None,
-        pattern="^(qwen|qwen_custom_voice|luxtts|chatterbox|chatterbox_turbo|tada|kokoro)$",
+        pattern="^(qwen|qwen_custom_voice|qwen_voice_design|luxtts|chatterbox|chatterbox_turbo|tada|kokoro|omnivoice)$",
     )
     personality: Optional[bool] = Field(
         None,
@@ -448,8 +483,9 @@ class HealthResponse(BaseModel):
     vram_used_mb: Optional[float] = None
     backend_type: Optional[str] = None  # Backend type (mlx or pytorch)
     backend_variant: Optional[str] = None  # Binary variant (cpu, cuda, or rocm)
-    supports_rocm: bool = False  # AMD GPU on Windows — the ROCm backend is applicable
+    supports_rocm: bool = False  # AMD GPU on Windows or Linux (/dev/kfd) — ROCm backend applicable
     gpu_compatibility_warning: Optional[str] = None  # Warning if GPU arch unsupported
+    cloud_enabled: bool = False  # VOICEBOX_CLOUD_ENABLED — the app shows the Cloud section only when true
 
 
 class DirectoryCheck(BaseModel):
@@ -504,6 +540,18 @@ class GenerationBatchFavoriteRequest(GenerationBatchRequest):
     """Set the favorite state for multiple generations."""
 
     is_favorited: bool
+
+class ModelLoadRequest(BaseModel):
+    """Request model for loading or unloading a model by name.
+
+    ``model_name`` is one of the ids returned by ``GET /models/status``
+    (e.g. ``"kokoro"``, ``"qwen-tts-0.6B"``, ``"whisper-turbo"``).
+    ``model_size`` is the legacy Qwen-only selector, kept so existing
+    ``POST /models/load?model_size=0.6B`` callers keep working.
+    """
+
+    model_name: Optional[str] = None
+    model_size: Optional[str] = None
 
 
 class ModelMigrateRequest(BaseModel):

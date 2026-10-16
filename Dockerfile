@@ -24,7 +24,7 @@ COPY web/ ./web/
 # defeat the `-z 's/,\n  ]/…/'` match below, since it's LF-anchored), then
 # strip workspaces not needed for web build, and fix trailing comma
 RUN sed -i 's/\r$//' package.json && \
-    sed -i '/"tauri"/d; /"landing"/d' package.json && \
+    sed -i '/"tauri"/d' package.json && \
     sed -i -z 's/,\n  ]/\n  ]/' package.json
 RUN bun install --no-save
 # Build frontend (skip tsc — upstream has pre-existing type errors)
@@ -32,7 +32,7 @@ RUN cd web && bunx --bun vite build
 
 
 # === Stage 2: Build Python dependencies ===
-FROM python:3.11-slim AS backend-builder
+FROM python:3.12-slim AS backend-builder
 
 # Re-declare ARG inside the stage (Docker scoping requirement).
 ARG PYTORCH_VARIANT=cpu
@@ -63,22 +63,40 @@ RUN if [ "$PYTORCH_VARIANT" = "rocm" ]; then \
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 RUN pip install --no-cache-dir --prefix=/install --no-deps chatterbox-tts
 RUN pip install --no-cache-dir --prefix=/install --no-deps hume-tada
+RUN pip install --no-cache-dir --prefix=/install --no-deps omnivoice
 RUN pip install --no-cache-dir --prefix=/install \
     git+https://github.com/QwenLM/Qwen3-TTS.git
 
 
 # === Stage 3: Runtime ===
-FROM python:3.11-slim
+FROM python:3.12-slim
 
 # Create non-root user; the entrypoint joins GPU device groups at runtime.
 RUN groupadd -r voicebox && \
     useradd -r -g voicebox -m -s /bin/bash voicebox
 
+# Create HuggingFace cache directory for the named volume
+RUN mkdir -p /home/voicebox/.cache/huggingface \
+    && chown -R voicebox:voicebox /home/voicebox/.cache/huggingface
+
+# Create voice generations directory for the named volume
+RUN mkdir -p /app/data/generations \
+    && chown -R voicebox:voicebox /app/data/generations
+
 WORKDIR /app
 
-# Install only runtime system dependencies (gosu drops root in the entrypoint)
+# Install only runtime system dependencies (gosu drops root in the entrypoint).
+# sox is required by qwen-tts's speech_vq X-vector extractor, which shells
+# out to it via the `sox` Python bindings for reference-audio normalization.
+# gcc/g++ are required by Triton (used by some torch ops, e.g.
+# bmm_outer_product) to JIT-compile its CUDA driver shim on first use --
+# without them, PyTorch's CUDA-capable build crashes with "Failed to find
+# C compiler" even when a GPU is actually present.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
+    sox \
+    gcc \
+    g++ \
     curl \
     gosu \
     && rm -rf /var/lib/apt/lists/*

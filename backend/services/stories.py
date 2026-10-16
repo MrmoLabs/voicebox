@@ -3,7 +3,11 @@ Story management module.
 """
 
 from typing import List, Optional
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import UTC, datetime
+import asyncio
+import os
+import re
 import uuid
 import tempfile
 from pathlib import Path
@@ -11,6 +15,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from .. import config
+from ..utils.ffmpeg import encode_audio
 from ..models import (
     StoryCreate,
     StoryResponse,
@@ -96,8 +101,8 @@ async def create_story(
         id=str(uuid.uuid4()),
         name=data.name,
         description=data.description,
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow(),
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
     )
 
     db.add(db_story)
@@ -206,7 +211,7 @@ async def update_story(
 
     story.name = data.name
     story.description = data.description
-    story.updated_at = datetime.utcnow()
+    story.updated_at = datetime.now(UTC)
 
     db.commit()
     db.refresh(story)
@@ -314,13 +319,13 @@ async def add_item_to_story(
         generation_id=data.generation_id,
         start_time_ms=start_time_ms,
         track=track,
-        created_at=datetime.utcnow(),
+        created_at=datetime.now(UTC),
     )
 
     db.add(item)
 
     # Update story updated_at
-    story.updated_at = datetime.utcnow()
+    story.updated_at = datetime.now(UTC)
 
     db.commit()
     db.refresh(item)
@@ -373,7 +378,7 @@ async def move_story_item(
     # Update story updated_at
     story = db.query(DBStory).filter_by(id=story_id).first()
     if story:
-        story.updated_at = datetime.utcnow()
+        story.updated_at = datetime.now(UTC)
 
     db.commit()
     db.refresh(item)
@@ -417,7 +422,7 @@ async def remove_item_from_story(
     # Update story updated_at
     story = db.query(DBStory).filter_by(id=story_id).first()
     if story:
-        story.updated_at = datetime.utcnow()
+        story.updated_at = datetime.now(UTC)
 
     db.commit()
     return True
@@ -470,7 +475,7 @@ async def trim_story_item(
     # Update story updated_at
     story = db.query(DBStory).filter_by(id=story_id).first()
     if story:
-        story.updated_at = datetime.utcnow()
+        story.updated_at = datetime.now(UTC)
 
     db.commit()
     db.refresh(item)
@@ -503,7 +508,7 @@ async def update_story_item_volume(
 
     story = db.query(DBStory).filter_by(id=story_id).first()
     if story:
-        story.updated_at = datetime.utcnow()
+        story.updated_at = datetime.now(UTC)
 
     db.commit()
     db.refresh(item)
@@ -576,7 +581,7 @@ async def split_story_item(
         trim_start_ms=absolute_split_ms,
         trim_end_ms=current_trim_end,
         volume=getattr(item, "volume", 1.0),
-        created_at=datetime.utcnow(),
+        created_at=datetime.now(UTC),
     )
 
     db.add(new_item)
@@ -584,7 +589,7 @@ async def split_story_item(
     # Update story updated_at
     story = db.query(DBStory).filter_by(id=story_id).first()
     if story:
-        story.updated_at = datetime.utcnow()
+        story.updated_at = datetime.now(UTC)
 
     db.commit()
     db.refresh(item)
@@ -650,7 +655,7 @@ async def duplicate_story_item(
         trim_start_ms=current_trim_start,
         trim_end_ms=current_trim_end,
         volume=getattr(original_item, "volume", 1.0),
-        created_at=datetime.utcnow(),
+        created_at=datetime.now(UTC),
     )
 
     db.add(new_item)
@@ -658,7 +663,7 @@ async def duplicate_story_item(
     # Update story updated_at
     story = db.query(DBStory).filter_by(id=story_id).first()
     if story:
-        story.updated_at = datetime.utcnow()
+        story.updated_at = datetime.now(UTC)
 
     db.commit()
     db.refresh(new_item)
@@ -700,7 +705,7 @@ async def update_story_item_times(
         item_map[update.generation_id].start_time_ms = update.start_time_ms
 
     # Update story updated_at
-    story.updated_at = datetime.utcnow()
+    story.updated_at = datetime.now(UTC)
 
     db.commit()
     return True
@@ -764,7 +769,7 @@ async def reorder_story_items(
         updated_items.append(_build_item_detail(item, generation, profile_name, db))
 
     # Update story updated_at
-    story.updated_at = datetime.utcnow()
+    story.updated_at = datetime.now(UTC)
 
     db.commit()
     return updated_items
@@ -823,7 +828,7 @@ async def set_story_item_version(
     # Update story updated_at
     story = db.query(DBStory).filter_by(id=story_id).first()
     if story:
-        story.updated_at = datetime.utcnow()
+        story.updated_at = datetime.now(UTC)
 
     db.commit()
     db.refresh(item)
@@ -833,16 +838,145 @@ async def set_story_item_version(
     return _build_item_detail(item, generation, profile.name if profile else "Unknown", db)
 
 
+@dataclass
+class _Chapter:
+    """Single chapter boundary used when exporting a story to m4b/mp3."""
+
+    start_ms: int
+    end_ms: int
+    title: str
+
+
+# Latin sentences end with [.!?] + whitespace; CJK sentences end with [。！？]
+# and conventionally have no following whitespace, so the boundary is the mark
+# itself. Both lookbehinds are zero-width — split() just consumes whitespace
+# when present.
+_SENTENCE_BREAK = re.compile(r"(?<=[.!?])\s+|(?<=[。！？])")
+
+
+def _chapter_title_from_text(text: Optional[str], max_len: int = 80) -> str:
+    """Derive a chapter title from the linked generation's text.
+
+    Takes the first sentence (or the leading slice if the sentence is long).
+    """
+    cleaned = re.sub(r"\s+", " ", text or "").strip()
+    if not cleaned:
+        return "Chapter"
+    first = _SENTENCE_BREAK.split(cleaned, maxsplit=1)[0].strip()
+    if not first:
+        return "Chapter"
+    if len(first) > max_len:
+        return first[:max_len].rstrip() + "…"
+    return first
+
+
+def _derive_chapters_auto(
+    segments: List[dict],
+    total_duration_ms: int,
+) -> List[_Chapter]:
+    """One chapter per story segment, ordered by start_time_ms.
+
+    Each segment dict must carry ``start_time_ms`` and ``text``. The final
+    chapter runs to ``total_duration_ms``. Segments with identical
+    ``start_time_ms`` are deduped (only the first contributes a chapter
+    boundary) so multi-track items don't produce zero-length chapters.
+    """
+    ordered = sorted(segments, key=lambda s: s["start_time_ms"])
+    chapters: List[_Chapter] = []
+    for seg in ordered:
+        start = int(seg["start_time_ms"])
+        if chapters and chapters[-1].start_ms == start:
+            continue
+        chapters.append(
+            _Chapter(start_ms=start, end_ms=0, title=_chapter_title_from_text(seg.get("text")))
+        )
+    for i, ch in enumerate(chapters):
+        ch.end_ms = chapters[i + 1].start_ms if i + 1 < len(chapters) else total_duration_ms
+    # Skip degenerate trailing chapter that would have zero duration.
+    return [ch for ch in chapters if ch.end_ms > ch.start_ms]
+
+
+def _escape_ffmetadata(value: str) -> str:
+    """Escape a metadata value for an FFMETADATA1 file.
+
+    Per the spec (https://ffmpeg.org/ffmpeg-formats.html#Metadata-1) ``=``,
+    ``;``, ``#``, ``\\``, and literal newlines must be backslash-escaped, or
+    ffmpeg will reject (or silently mangle) the chapter entry.
+    """
+    return (
+        value.replace("\\", "\\\\")
+        .replace("=", "\\=")
+        .replace(";", "\\;")
+        .replace("#", "\\#")
+        .replace("\n", "\\n")
+    )
+
+
+def _write_ffmetadata(chapters: List[_Chapter], path: Path) -> None:
+    """Serialize chapter list to an FFMETADATA1 file ffmpeg can ingest via ``-i``."""
+    lines = [";FFMETADATA1"]
+    for ch in chapters:
+        lines.extend(
+            [
+                "[CHAPTER]",
+                "TIMEBASE=1/1000",
+                f"START={ch.start_ms}",
+                f"END={ch.end_ms}",
+                f"title={_escape_ffmetadata(ch.title)}",
+            ]
+        )
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _ffmpeg_encode(
+    wav_path: Path,
+    out_path: Path,
+    fmt: str,
+    chapters: Optional[List[_Chapter]],
+) -> None:
+    """Transcode WAV → fmt with optional embedded chapter metadata.
+
+    Raises RuntimeError on missing ffmpeg or non-zero exit.
+    """
+    meta_path: Optional[Path] = None
+    try:
+        if chapters:
+            meta_path = wav_path.with_suffix(".chapters.txt")
+            _write_ffmetadata(chapters, meta_path)
+        encode_audio(wav_path, out_path, fmt, metadata_path=meta_path)
+    finally:
+        if meta_path is not None:
+            meta_path.unlink(missing_ok=True)
+
+
+def _make_tempfile(suffix: str) -> Path:
+    """Create a closed-on-return temp file path with the given suffix.
+
+    Uses ``tempfile.mkstemp`` rather than ``NamedTemporaryFile(delete=False).name``
+    so the OS file descriptor is released immediately instead of lingering
+    until garbage collection (Ruff SIM115).
+    """
+    fd, name = tempfile.mkstemp(suffix=suffix)
+    os.close(fd)
+    return Path(name)
+
+
 async def export_story_audio(
     story_id: str,
     db: Session,
+    fmt: str = "wav",
+    chapters_mode: str = "none",
 ) -> Optional[bytes]:
     """
-    Export story as single mixed audio file with timecode-based mixing.
+    Export story as a single mixed audio file with timecode-based mixing.
 
     Args:
         story_id: Story ID
         db: Database session
+        fmt: Output container — "wav" (default), "m4b", or "mp3".
+        chapters_mode: "none" (default) leaves chapter metadata off; "auto"
+            derives one chapter per story item, titled from its generation
+            text. WAV ignores this — chapters are an m4b/mp3 feature.
 
     Returns:
         Audio file bytes or None if story not found
@@ -918,6 +1052,7 @@ async def export_story_audio(
                     "audio": trimmed_audio,
                     "start_time_ms": start_time_ms,
                     "duration_ms": effective_duration_ms,
+                    "text": generation.text,
                 }
             )
         except Exception:
@@ -961,18 +1096,29 @@ async def export_story_audio(
     if max_val > 1.0:
         final_audio = final_audio / max_val
 
-    # Save to temporary file
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-        tmp_path = tmp.name
+    fmt = (fmt or "wav").lower()
+    if fmt not in ("wav", "m4b", "mp3"):
+        raise ValueError(f"Unsupported export format: {fmt}")
 
+    chapters: Optional[List[_Chapter]] = None
+    if fmt != "wav" and chapters_mode == "auto":
+        chapters = _derive_chapters_auto(audio_data, max_end_time_ms) or None
+
+    wav_path = _make_tempfile(suffix=".wav")
+    out_path: Optional[Path] = None
     try:
-        save_audio(final_audio, tmp_path, sample_rate)
+        save_audio(final_audio, str(wav_path), sample_rate)
+        if fmt == "wav":
+            return wav_path.read_bytes()
 
-        # Read file bytes
-        with open(tmp_path, "rb") as f:
-            audio_bytes = f.read()
-
-        return audio_bytes
+        out_suffix = ".m4b" if fmt == "m4b" else ".mp3"
+        out_path = _make_tempfile(suffix=out_suffix)
+        # ffmpeg is CPU-bound and can run for several seconds on a real
+        # audiobook — offload to a worker thread so it doesn't block the
+        # FastAPI event loop while it runs.
+        await asyncio.to_thread(_ffmpeg_encode, wav_path, out_path, fmt, chapters)
+        return out_path.read_bytes()
     finally:
-        # Clean up temp file
-        Path(tmp_path).unlink(missing_ok=True)
+        wav_path.unlink(missing_ok=True)
+        if out_path is not None:
+            out_path.unlink(missing_ok=True)

@@ -1499,6 +1499,23 @@ async fn debug_clipboard_roundtrip(
     }))
 }
 
+/// Final step of the main-window close flow, after the frontend has had its
+/// chance to stop the server.
+///
+/// On Linux and Windows, closing the main window must exit the process: the hidden dictate
+/// pill webview is still a window, so Tauri would otherwise keep running with
+/// no UI, the backend already stopped, and `speak_monitor` retrying
+/// `/events/speak` every 30 s (#1040). On macOS the window just
+/// closes, as before, so "Keep server running" plus the global hotkey keep
+/// dictation available without the main window.
+fn finish_main_window_close(window: &tauri::Window) {
+    if cfg!(any(target_os = "linux", target_os = "windows")) {
+        window.app_handle().exit(0);
+    } else {
+        window.close().ok();
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1554,7 +1571,7 @@ pub fn run() {
                     }
                 });
 
-                // Agent-initiated speech (voicebox.speak over MCP or POST /speak)
+                // Agent-initiated speech (voicebox_speak over MCP or POST /speak)
                 // pops the pill up so the user can see what's coming out of their
                 // machine. The `dictate:show` listener is kept for any frontend
                 // caller that wants to force-surface the pill directly, but the
@@ -1671,13 +1688,12 @@ pub fn run() {
 
                 if let Err(e) = app_handle.emit("window-close-requested", ()) {
                     eprintln!("Failed to emit window-close-requested event: {}", e);
-                    window.close().ok();
+                    finish_main_window_close(window);
                     return;
                 }
 
                 // Set up listener for frontend response
                 let window_for_close = window.clone();
-                let app_for_exit = app_handle.clone();
                 let closing_for_timeout = closing.clone();
                 let (tx, mut rx) = mpsc::unbounded_channel::<()>();
 
@@ -1688,11 +1704,12 @@ pub fn run() {
                 tauri::async_runtime::spawn(async move {
                     tokio::select! {
                         _ = rx.recv() => {
-                            app_for_exit.exit(0);
+                            println!("Frontend cleanup complete, closing");
+                            finish_main_window_close(&window_for_close);
                         }
                         _ = tokio::time::sleep(tokio::time::Duration::from_secs(5)) => {
-                            eprintln!("Window close timeout, exiting application anyway");
-                            app_for_exit.exit(0);
+                            eprintln!("Window close timeout, closing anyway");
+                            finish_main_window_close(&window_for_close);
                         }
                     }
                     window_for_close.unlisten(listener_id);

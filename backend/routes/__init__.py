@@ -27,6 +27,8 @@ def register_routers(app: FastAPI) -> None:
     from .cloud import router as cloud_router
     from .audiobooks import router as audiobooks_router
 
+    from .openai_compat import router as openai_compat_router
+
     app.include_router(health_router)
     app.include_router(profiles_router)
     app.include_router(channels_router)
@@ -48,3 +50,5 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(events_router)
     app.include_router(cloud_router)
     app.include_router(audiobooks_router)
+
+    app.include_router(openai_compat_router)

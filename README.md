@@ -23,6 +23,9 @@
   <a href="https://github.com/jamiepine/voicebox/blob/main/LICENSE">
     <img src="https://img.shields.io/github/license/jamiepine/voicebox?style=flat" alt="License" />
   </a>
+  <a href="https://capy.ai?utm_source=voicebox&utm_medium=readme&utm_campaign=built-with-capy">
+    <img src="https://img.shields.io/badge/built%20with-Capy-63C8C1?style=flat" alt="Built with Capy" />
+  </a>
   <a href="https://deepwiki.com/jamiepine/voicebox">
     <img src="https://img.shields.io/static/v1?label=Ask&message=DeepWiki&color=5B6EF7" alt="Ask DeepWiki" />
   </a>
@@ -45,7 +48,7 @@
 
 <p align="center">
   <a href="https://voicebox.sh">
-    <img src="landing/public/assets/app-screenshot-1.webp" alt="Voicebox App Screenshot" width="800" />
+    <img src=".github/assets/app-screenshot-1.webp" alt="Voicebox App Screenshot" width="800" />
   </a>
 </p>
 
@@ -56,31 +59,48 @@
 <br/>
 
 <p align="center">
-  <img src="landing/public/assets/app-screenshot-2.webp" alt="Voicebox Screenshot 2" width="800" />
+  <img src=".github/assets/app-screenshot-2.webp" alt="Voicebox Screenshot 2" width="800" />
 </p>
 
 <p align="center">
-  <img src="landing/public/assets/app-screenshot-3.webp" alt="Voicebox Screenshot 3" width="800" />
+  <img src=".github/assets/app-screenshot-3.webp" alt="Voicebox Screenshot 3" width="800" />
 </p>
 
 <br/>
 
+## Built with Capy
+
+<p align="center">
+  <a href="https://capy.ai?utm_source=voicebox&utm_medium=readme&utm_campaign=built-with-capy">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset=".github/assets/capy-wordmark-dark.svg" />
+      <img src=".github/assets/capy-wordmark-light.svg" alt="Capy" width="160" />
+    </picture>
+  </a>
+</p>
+
+Voicebox is built and maintained with [Capy](https://capy.ai?utm_source=voicebox&utm_medium=readme&utm_campaign=built-with-capy). A Capy Captain thread directs the project day to day, and its crew threads test, rebase, and review each contributor pull request on Linux and on a Mac Studio before Jamie merges it. Voicebox stays free and open source under the MIT license, with no splash screens, banners, or interruptions in the app.
+
+**[Try Capy →](https://capy.ai?utm_source=voicebox&utm_medium=readme&utm_campaign=built-with-capy)** · [How Voicebox is built](https://voicebox.sh/built-with-capy)
+
+---
+
 ## What is Voicebox?
 
-Voicebox is a **local-first AI voice studio** — a free and open-source alternative to **ElevenLabs** and **WisprFlow** in one app. Clone voices from a few seconds of audio, generate speech in 23 languages across 7 TTS engines, dictate into any text field with a global hotkey, and give any MCP-aware AI agent a voice of your choosing.
+Voicebox is a **local-first AI voice studio** — a free and open-source alternative to **ElevenLabs** and **WisprFlow** in one app. Clone voices from a few seconds of audio, generate speech in 23 languages across 8 TTS engines, dictate into any text field with a global hotkey, and give any MCP-aware AI agent a voice of your choosing.
 
 The two cloud incumbents sit on opposite halves of the voice I/O loop — ElevenLabs on output, WisprFlow on input. Voicebox does both, bridges them with a bundled local LLM for refinement and per-profile personas, and runs the whole thing on your machine.
 
 - **Complete privacy** — models, voice data, and captures never leave your machine
-- **7 TTS engines** — Qwen3-TTS, Qwen CustomVoice, LuxTTS, Chatterbox Multilingual, Chatterbox Turbo, HumeAI TADA, and Kokoro
+- **8 TTS engines** — Qwen3-TTS, Qwen CustomVoice, Qwen VoiceDesign, LuxTTS, Chatterbox Multilingual, Chatterbox Turbo, HumeAI TADA, and Kokoro
 - **Voice cloning and preset voices** — zero-shot cloning from a reference sample, or 50+ curated preset voices via Kokoro and Qwen CustomVoice
 - **23 languages** — from English to Arabic, Japanese, Hindi, Swahili, and more
 - **Post-processing effects** — pitch shift, reverb, delay, chorus, compression, and filters
-- **Expressive speech** — paralinguistic tags like `[laugh]`, `[sigh]`, `[gasp]` via Chatterbox Turbo; natural-language delivery control via Qwen CustomVoice
+- **Expressive speech** — paralinguistic tags like `[laugh]`, `[sigh]`, `[gasp]` via Chatterbox Turbo; natural-language delivery control via Qwen CustomVoice; voices described in plain language via Qwen VoiceDesign
 - **Unlimited length** — auto-chunking with crossfade for scripts, articles, and chapters
 - **Stories editor** — multi-track timeline for conversations, podcasts, and narratives
 - **Voice input** — global dictation hotkey with push-to-talk and toggle modes, accessibility-verified auto-paste on macOS, in-app mic on every text field, Whisper-based STT
-- **Agent voice output** — one tool call (`voicebox.speak`) and any MCP-aware agent (Claude Code, Cursor, Cline) speaks to you in a voice you've cloned
+- **Agent voice output** — one tool call (`voicebox_speak`) and any MCP-aware agent (Claude Code, Cursor, Cline) speaks to you in a voice you've cloned
 - **Voice personalities** — attach a free-form persona to any voice profile, then Compose, Rewrite, or Respond via a bundled local LLM — agents can invoke the same modes over MCP
 - **API-first** — REST API plus a built-in MCP server for integrating voice I/O into your own apps and agents
 - **Native performance** — built with Tauri (Rust), not Electron
@@ -109,12 +129,13 @@ The two cloud incumbents sit on opposite halves of the voice I/O loop — Eleven
 
 ### Multi-Engine Voice Cloning
 
-Seven TTS engines with different strengths, switchable per-generation:
+Eight TTS engines with different strengths, switchable per-generation:
 
 | Engine                      | Languages | Strengths                                                                                                                                |
 | --------------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | **Qwen3-TTS** (0.6B / 1.7B) | 10        | High-quality multilingual cloning, delivery instructions ("speak slowly", "whisper")                                                     |
 | **Qwen CustomVoice**        | 10        | 9 curated preset voices with natural-language delivery control — no reference audio required                                             |
+| **Qwen VoiceDesign**        | 10        | Builds a voice from a written description — no reference audio or preset needed                                                         |
 | **LuxTTS**                  | English   | Lightweight (~1GB VRAM), 48kHz output, 150x realtime on CPU                                                                              |
 | **Chatterbox Multilingual** | 23        | Broadest language coverage — Arabic, Danish, Finnish, Greek, Hebrew, Hindi, Malay, Norwegian, Polish, Swahili, Swedish, Turkish and more |
 | **Chatterbox Turbo**        | English   | Fast 350M model with paralinguistic emotion/sound tags                                                                                   |
@@ -130,7 +151,9 @@ literally as text.
 With **Chatterbox Turbo** selected, type `/` in the text input to open the tag
 inserter and add expressive tags inline with speech:
 
-`[laugh]` `[chuckle]` `[gasp]` `[cough]` `[sigh]` `[groan]` `[sniff]` `[shush]` `[clear throat]`
+Sounds: `[laugh]` `[chuckle]` `[gasp]` `[cough]` `[sigh]` `[groan]` `[sniff]` `[shush]` `[clear throat]`
+
+Delivery: `[angry]` `[crying]` `[dramatic]` `[fear]` `[happy]` `[narration]` `[sarcastic]` `[surprised]` `[whispering]` `[advertisement]`
 
 ### Post-Processing Effects
 
@@ -232,7 +255,7 @@ Every agent gets a voice. One tool call and any MCP-aware agent can speak to you
 
 ```ts
 // In any MCP-aware agent:
-await voicebox.speak({
+await voicebox_speak({
   text: "Deploy complete.",
   profile: "Morgan",
 });
@@ -252,7 +275,7 @@ Attach a free-form personality to any voice profile — who this voice is, how t
 - **Compose** — a shuffle button that drops a fresh in-character line into the textarea; edit and speak, or click again for a different take
 - **Speak in character** — a toggle that routes your input text through the personality LLM to be rewritten in their voice before TTS
 
-Agents can reach the same rewrite path over MCP by passing `personality: true` to `voicebox.speak`, turning the tool into a text-in → personality-LLM → TTS pipeline. The same LLM backs dictation's refinement step — one LLM in the app, one model cache, one GPU-memory footprint.
+Agents can reach the same rewrite path over MCP by passing `personality: true` to `voicebox_speak`, turning the tool into a text-in → personality-LLM → TTS pipeline. The same LLM backs dictation's refinement step — one LLM in the app, one model cache, one GPU-memory footprint.
 
 **Local LLM options:** Qwen3 0.6B / 1.7B / 4B, sharing the TTS runtime (MLX on Apple Silicon, PyTorch elsewhere).
 
@@ -345,11 +368,11 @@ claude mcp add voicebox \
 }
 ```
 
-Four tools ship: `voicebox.speak`, `voicebox.transcribe`, `voicebox.list_captures`, `voicebox.list_profiles`. Per-client voice bindings are managed in **Voicebox → Settings → MCP**. See the [full MCP guide](docs/content/docs/overview/mcp-server.mdx) for tool signatures, resolution precedence, the speaking-pill contract, and security notes.
+Four tools ship: `voicebox_speak`, `voicebox_transcribe`, `voicebox_list_captures`, `voicebox_list_profiles`. Per-client voice bindings are managed in **Voicebox → Settings → MCP**. See the [full MCP guide](docs/content/docs/overview/mcp-server.mdx) for tool signatures, resolution precedence, the speaking-pill contract, and security notes.
 
 ```ts
 // In any MCP-aware agent:
-await voicebox.speak({
+await voicebox_speak({
   text: "Tests passing. Ready to merge.",
   profile: "Morgan",      // optional — falls back to the per-client binding
   personality: true,      // optional — rewrites text through the profile's personality LLM first
@@ -370,7 +393,7 @@ Full API documentation available at `http://127.0.0.1:17493/docs`.
 | Frontend      | React, TypeScript, Tailwind CSS                                                 |
 | State         | Zustand, React Query                                                            |
 | Backend       | FastAPI (Python)                                                                |
-| TTS Engines   | Qwen3-TTS, Qwen CustomVoice, LuxTTS, Chatterbox, Chatterbox Turbo, TADA, Kokoro |
+| TTS Engines   | Qwen3-TTS, Qwen CustomVoice, Qwen VoiceDesign, LuxTTS, Chatterbox, Chatterbox Turbo, TADA, Kokoro |
 | STT           | Whisper / Whisper Turbo (PyTorch or MLX)                                        |
 | Local LLM     | Qwen3 (0.6B / 1.7B / 4B), shared runtime with TTS / STT                         |
 | MCP Server    | FastMCP mounted at `/mcp` (Streamable HTTP) + bundled stdio shim binary         |
@@ -417,7 +440,7 @@ just dev     # starts backend + desktop app
 
 Install [just](https://github.com/casey/just): `brew install just` or `cargo install just`. Run `just --list` to see all commands.
 
-**Prerequisites:** [Bun](https://bun.sh), [Rust](https://rustup.rs), [Python 3.11+](https://python.org), [Tauri Prerequisites](https://v2.tauri.app/start/prerequisites/), and [Xcode](https://developer.apple.com/xcode/) on macOS.
+**Prerequisites:** [Bun](https://bun.sh), [Rust](https://rustup.rs), [Python 3.12](https://python.org), [Tauri Prerequisites](https://v2.tauri.app/start/prerequisites/), and [Xcode](https://developer.apple.com/xcode/) on macOS.
 
 The repo ships a pre-wired `.mcp.json` at the root — running Claude Code inside this checkout picks up the Voicebox MCP tools automatically once the dev app is running.
 
@@ -442,7 +465,6 @@ voicebox/
 ├── tauri/            # Desktop app (Tauri + Rust)
 ├── web/              # Web deployment
 ├── backend/          # Python FastAPI server
-├── landing/          # Marketing website
 └── scripts/          # Build & release scripts
 ```
 

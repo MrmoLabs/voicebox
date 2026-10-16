@@ -76,15 +76,15 @@ if (-not $output.StartsWith($releaseRoot, [System.StringComparison]::OrdinalIgno
 if (Test-Path -LiteralPath $output) { Remove-Item -LiteralPath $output -Recurse -Force }
 New-Item -ItemType Directory -Path $output | Out-Null
 
-& python (Join-Path $projectRoot "scripts\package_cuda.py") $cudaDir --output $output --cuda-libs-version "cu128-v1" --torch-compat ">=2.7.0,<2.11.0"
+& python (Join-Path $projectRoot "scripts\package_cuda.py") $cudaDir --output $output --platform "windows-x86_64" --cuda-libs-version "cu128-v1" --torch-compat ">=2.11.0,<2.12.0"
 if ($LASTEXITCODE -ne 0) { throw "CUDA archive packaging failed." }
 
 $msiName = Split-Path -Leaf $MsiPath
 Copy-Item -LiteralPath $MsiPath -Destination (Join-Path $output $msiName)
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot "Install-Voicebox-Windows-CUDA.ps1") -Destination (Join-Path $output "Install-Voicebox-Windows-CUDA.ps1")
 
-$coreName = "voicebox-server-cuda.tar.gz"
-$libsName = "cuda-libs-cu128-v1.tar.gz"
+$coreName = "voicebox-server-cuda-windows-x86_64.tar.gz"
+$libsName = "cuda-libs-windows-x86_64-cu128-v1.tar.gz"
 $payloadNames = @($msiName, $coreName, $libsName, "cuda-libs.json")
 $files = foreach ($name in $payloadNames) {
     $path = Join-Path $output $name

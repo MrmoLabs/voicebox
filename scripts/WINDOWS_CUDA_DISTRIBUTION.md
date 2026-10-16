@@ -16,8 +16,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build_windows_cuda_distributi
 The builder creates `release\Voicebox-<version>-Windows-x64-CUDA` containing:
 
 - the Voicebox MSI;
-- `voicebox-server-cuda.tar.gz` (server core and portable Python backend);
-- `cuda-libs-cu128-v1.tar.gz` (NVIDIA runtime libraries);
+- `voicebox-server-cuda-windows-x86_64.tar.gz` (server core and portable Python backend);
+- `cuda-libs-windows-x86_64-cu128-v1.tar.gz` (NVIDIA runtime libraries);
 - `cuda-libs.json` and `package-manifest.json`;
 - `SHA256SUMS.txt`;
 - `Install-Voicebox-Windows-CUDA.ps1`.

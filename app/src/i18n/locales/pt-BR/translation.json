@@ -243,12 +243,20 @@
     "discard": "Descartar",
     "source": {
       "clone": "Clonar de áudio",
-      "builtin": "Voz integrada"
+      "builtin": "Voz integrada",
+      "design": "Descrever uma voz"
     },
     "builtin": {
       "hint": "Escolha uma voz pré-construída. Estas não precisam de uma amostra de áudio.",
       "badge": "Voz Integrada",
       "note": "Este perfil usa uma voz integrada. A voz não pode ser alterada após a criação."
+    },
+    "design": {
+      "hint": "Descreva a voz que você quer em linguagem natural. Não é preciso amostra de áudio.",
+      "placeholder": "Um homem mais velho de voz quente e rouca, com sotaque escocês pausado e um toque de humor.",
+      "engineNote": "Usa Qwen VoiceDesign",
+      "badge": "Voz projetada",
+      "note": "Este perfil usa uma voz descrita. A descrição não pode ser alterada após a criação."
     },
     "sampleTabs": {
       "upload": "Enviar",
@@ -264,6 +272,7 @@
       "descriptionPlaceholder": "Descreva esta voz…",
       "language": "Idioma",
       "referenceText": "Texto de Referência",
+      "designPrompt": "Descrição da voz",
       "referenceTextPlaceholder": "Digite o texto exato falado no áudio…",
       "defaultEngine": "Motor Padrão",
       "noPreference": "Sem preferência",
@@ -316,8 +325,11 @@
       "voiceUpdatedDescription": "\"{{name}}\" foi atualizada com sucesso.",
       "noVoiceSelected": "Nenhuma voz selecionada",
       "noVoiceSelectedDescription": "Selecione uma voz integrada.",
+      "noDesignPrompt": "Nenhuma descrição informada",
+      "noDesignPromptDescription": "Descreva a voz que você quer.",
       "profileCreated": "Perfil criado",
       "profileCreatedBuiltin": "\"{{name}}\" foi criado com uma voz integrada.",
+      "profileCreatedDesigned": "\"{{name}}\" foi criado a partir de uma descrição de voz.",
       "profileCreatedSample": "\"{{name}}\" foi criado com uma amostra.",
       "sampleRequired": "Amostra de áudio obrigatória",
       "sampleRequiredDescription": "Forneça uma amostra de áudio para criar o perfil de voz.",
@@ -410,7 +422,7 @@
     },
     "deleteDialog": {
       "title": "Excluir Perfil",
-      "body": "Tem certeza de que deseja excluir \"{{name}}\"? Esta ação não pode ser desfeita.",
+      "body": "Tem certeza de que deseja excluir \"{{name}}\"? Todas as gerações feitas com esta voz, incluindo seus arquivos de áudio, também serão excluídas. Esta ação não pode ser desfeita.",
       "deleting": "Excluindo…"
     }
   },
@@ -623,6 +635,12 @@
     "searchNoMatches": "Nenhuma geração correspondente encontrada",
     "searchNoAvailable": "Nenhuma geração disponível",
     "exportAudio": "Exportar Áudio",
+    "exportDropdownLabel": "Exportar história como",
+    "exportFormats": {
+      "wav": "Áudio (WAV)",
+      "mp3": "Áudio (MP3)",
+      "m4b": "Audiolivro (M4B, capítulos)"
+    },
     "empty": {
       "title": "Nenhum item nesta história",
       "hint": "Gere fala usando a caixa abaixo para adicionar itens"
@@ -650,6 +668,7 @@
       "menu": "Ações",
       "play": "Reproduzir",
       "exportAudio": "Exportar Áudio",
+      "exportAudioMp3": "Exportar Áudio (MP3)",
       "exportPackage": "Exportar Pacote",
       "applyEffects": "Aplicar Efeitos",
       "regenerate": "Regenerar"
@@ -760,8 +779,13 @@
       }
     },
     "general": {
-      "docs": { "title": "Ler a Documentação" },
-      "discord": { "title": "Entrar no Discord", "subtitle": "Tire dúvidas e compartilhe vozes" },
+      "docs": {
+        "title": "Ler a Documentação"
+      },
+      "discord": {
+        "title": "Entrar no Discord",
+        "subtitle": "Tire dúvidas e compartilhe vozes"
+      },
       "serverUrl": {
         "title": "URL do Servidor",
         "description": "O endereço do seu servidor backend do Voicebox.",
@@ -1050,7 +1074,7 @@
       },
       "defaultVoice": {
         "title": "Voz padrão",
-        "description": "Usada quando um agente chama voicebox.speak sem um perfil específico e não tem vínculo por cliente.",
+        "description": "Usada quando um agente chama voicebox_speak sem um perfil específico e não tem vínculo por cliente.",
         "label": "Voz de reprodução padrão",
         "labelHint": "Compartilhada com o menu 'Reproduzir como voz' da aba Capturas — uma voz padrão para reprodução passiva.",
         "none": "(nenhuma)"
@@ -1128,7 +1152,7 @@
         "switchCpu": "Falha ao mudar para CPU",
         "deleteCuda": "Falha ao excluir o backend CUDA"
       },
-      "footer": "O Voicebox detecta e usa automaticamente a melhor GPU disponível no seu sistema. Em Macs com Apple Silicon, o backend MLX roda nativamente no Neural Engine e na GPU via Metal Performance Shaders (MPS), sem configuração adicional. No Windows e no Linux com GPUs NVIDIA, você pode baixar um backend CUDA opcional para inferência acelerada por hardware. AMD ROCm, Intel XPU e DirectML também são suportados quando disponíveis através do PyTorch. Quando nenhuma GPU é detectada, o Voicebox recorre à CPU — todos os motores ainda funcionam, só que mais devagar."
+      "footer": "O Voicebox detecta e usa automaticamente a melhor GPU disponível no seu sistema. Em Macs com Apple Silicon, o backend MLX roda nativamente no Neural Engine e na GPU via Metal Performance Shaders (MPS), sem configuração adicional. No Windows e no Linux, você pode baixar backends opcionais CUDA (NVIDIA) ou ROCm (AMD) para inferência acelerada por hardware. Intel XPU e DirectML também são suportados quando disponíveis através do PyTorch. Quando nenhuma GPU é detectada, o Voicebox recorre à CPU — todos os motores ainda funcionam, só que mais devagar."
     },
     "logs": {
       "title": "Logs do Servidor",
