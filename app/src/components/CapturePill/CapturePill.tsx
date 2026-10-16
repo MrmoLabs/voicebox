@@ -12,6 +12,7 @@ export type PillState =
   | 'transcribing'
   | 'refining'
   | 'speaking'
+  | 'buffering'
   | 'completed'
   | 'rest'
   | 'error';
@@ -21,6 +22,7 @@ const PILL_LABEL_KEYS: Record<Exclude<PillState, 'rest' | 'error'>, string> = {
   transcribing: 'captures.pill.transcribing',
   refining: 'captures.pill.refining',
   speaking: 'captures.pill.speaking',
+  buffering: 'generation.live.buffering',
   completed: 'captures.pill.completed',
 };
 
@@ -113,7 +115,7 @@ export function CapturePill({
     </span>
   );
 
-  const stopButton = onStop && state === 'recording' ? (
+  const stopButton = onStop && ['recording', 'speaking', 'buffering'].includes(state) ? (
     <button
       type="button"
       onClick={onStop}

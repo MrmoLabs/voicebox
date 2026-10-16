@@ -101,7 +101,8 @@ async def generate_speech(
         text = llm_result.text.strip()
         if not text:
             raise HTTPException(status_code=500, detail="LLM produced empty output; nothing to speak.")
-        source = "personality_speak"
+        if source == "manual":
+            source = "personality_speak"
 
     generation = await history.create_generation(
         profile_id=data.profile_id,

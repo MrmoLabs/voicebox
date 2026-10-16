@@ -174,6 +174,9 @@ fn dispatch(app: &AppHandle, event: &str, data: &str) {
         "speak-end" => {
             let _ = app.emit("dictate:speak-end", data.to_string());
         }
+        "speak-stop" => {
+            let _ = app.emit("dictate:speak-stop", data.to_string());
+        }
         // `ready` and `ping` are heartbeats; ignore.
         _ => {}
     }

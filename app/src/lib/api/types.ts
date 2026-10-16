@@ -84,7 +84,7 @@ export interface GenerationRequest {
   instruct?: string;
   /** When true and the profile has a personality prompt, input text is rewritten in-character before TTS. */
   personality?: boolean;
-  source?: 'manual' | 'audiobook';
+  source?: 'manual' | 'audiobook' | 'rest' | 'mcp';
   max_chunk_chars?: number;
   crossfade_ms?: number;
   normalize?: boolean;

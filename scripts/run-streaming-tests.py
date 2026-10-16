@@ -23,5 +23,6 @@ tests = ['test_live_audio', 'test_generation_progress', 'test_generation_progres
          'test_combined_voice_cache', 'test_task_queue_cancellation',
          'test_generation_engine_resolution', 'test_voice_prompt_cache_unload', 'test_qwen_load_concurrency',
          'test_models_load_by_name', 'test_model_runtime', 'test_audiobooks', 'test_designed_profiles']
-sys.exit(pytest.main([f'backend/tests/{test}.py' for test in tests] +
-    ['-q', '-p', 'no:cacheprovider', '-p', 'pytest_asyncio.plugin', '--disable-warnings', '--tb=short']))
+tests += ['test_speak_dispatch', 'test_speak_language', 'test_mcp_speak']
+sys.exit(pytest.main((sys.argv[1:] or [f'backend/tests/{test}.py' for test in tests]) +
+    ['-q', '-p', 'no:cacheprovider', '-p', 'pytest_asyncio.plugin', '--asyncio-mode=auto', '--disable-warnings', '--tb=short']))

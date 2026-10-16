@@ -85,6 +85,21 @@ class Generation(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(UTC), index=True)
 
 
+class SpeakDispatch(Base):
+    """Durable idempotency tombstone; kept even when generated audio is deleted."""
+
+    __tablename__ = "speak_dispatches"
+
+    id = Column(String, primary_key=True)
+    client_id = Column(String, nullable=False, index=True)
+    session_id = Column(String, nullable=False, index=True)
+    request_id = Column(String, nullable=False)
+    fingerprint = Column(String, nullable=False)
+    generation_id = Column(String, nullable=True)
+    cancelled = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
+
+
 class Story(Base):
     """A story that sequences multiple generations."""
 

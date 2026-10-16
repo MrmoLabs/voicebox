@@ -3,7 +3,7 @@ Pydantic models for request/response validation.
 """
 
 from pydantic import BaseModel, Field, model_validator
-from typing import Any, Optional, List
+from typing import Any, Optional, List, Literal
 from datetime import datetime
 
 from .utils.capture_chords import (
@@ -92,7 +92,7 @@ class GenerationRequest(BaseModel):
     )
     source: Optional[str] = Field(
         default=None,
-        pattern="^(manual|audiobook)$",
+        pattern="^(manual|audiobook|rest|mcp)$",
         description="Origin of the request. Audiobook jobs never trigger global autoplay.",
     )
     max_chunk_chars: int = Field(
@@ -406,6 +406,22 @@ class SpeakRequest(BaseModel):
         None,
         pattern="^(zh|en|ja|ko|de|fr|ru|pt|es|it|he|ar|da|el|fi|hi|ms|nl|no|pl|sv|sw|tr)$",
     )
+    model_size: Optional[str] = Field(None, pattern="^(1\\.7B|0\\.6B|1B|3B)$")
+    stream_audio: bool = False
+    playback_owner: Literal["voicebox", "client"] = "voicebox"
+    session_id: Optional[str] = Field(None, min_length=1, max_length=200)
+    request_id: Optional[str] = Field(None, min_length=1, max_length=200)
+
+    @model_validator(mode="after")
+    def paired_identity(self):
+        if (self.session_id is None) != (self.request_id is None):
+            raise ValueError("session_id and request_id must be supplied together")
+        return self
+
+
+class SpeakCancelRequest(BaseModel):
+    session_id: str = Field(..., min_length=1, max_length=200)
+    request_id: Optional[str] = Field(None, min_length=1, max_length=200)
 
 
 class LLMGenerateRequest(BaseModel):
