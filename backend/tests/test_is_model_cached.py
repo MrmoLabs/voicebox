@@ -15,10 +15,11 @@ never touches.
 
 import ast
 import logging
+import shutil
 from pathlib import Path
 from typing import Optional
 
-_SOURCE = (Path(__file__).parent.parent / "backends" / "base.py").read_text()
+_SOURCE = (Path(__file__).parent.parent / "backends" / "base.py").read_text(encoding="utf-8")
 _MODULE = ast.parse(_SOURCE)
 _FUNC_SRC = "\n\n".join(
     ast.get_source_segment(_SOURCE, node)
@@ -55,7 +56,14 @@ def test_orphaned_incomplete_blob_does_not_block_cache_hit(tmp_path, monkeypatch
     completed_blob = blobs_dir / "deadbeef"
     completed_blob.write_bytes(b"weights")
     (blobs_dir / "deadbeef.incomplete").write_bytes(b"stale partial")
-    (snapshots_dir / "model.safetensors").symlink_to(completed_blob)
+    snapshot = snapshots_dir / "model.safetensors"
+    try:
+        snapshot.symlink_to(completed_blob)
+    except OSError as exc:
+        if getattr(exc, "winerror", None) != 1314:
+            raise
+        # Hugging Face also copies snapshots on Windows without symlink privilege.
+        shutil.copyfile(completed_blob, snapshot)
 
     assert is_model_cached(repo) is True
 
@@ -69,6 +77,6 @@ def test_genuinely_in_progress_download_is_not_cached(tmp_path, monkeypatch):
     _, blobs_dir, snapshots_dir = _make_repo_cache(tmp_path, repo)
 
     (blobs_dir / "feedface.incomplete").write_bytes(b"partial")
-    (snapshots_dir / "config.json").write_text("{}")
+    (snapshots_dir / "config.json").write_text("{}", encoding="utf-8")
 
     assert is_model_cached(repo) is False

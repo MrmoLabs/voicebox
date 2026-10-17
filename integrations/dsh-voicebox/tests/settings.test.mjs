@@ -3,13 +3,13 @@ import assert from 'node:assert/strict';
 import { saveSettings, validateSettings } from '../src/settings.js';
 import { VoiceboxProxy } from '../src/proxy.js';
 
-const settings = { endpoint: 'http://127.0.0.1:17493', clientId: 'dsh-voicebox', profile: 'voice-2', language: 'zh', modelSize: '1.7B', sessionIds: [] };
+const settings = { endpoint: 'http://127.0.0.1:17493', clientId: 'dsh-voicebox', profile: 'voice-2', language: 'zh', modelSize: '1.7B', readingMode: 'streaming', sessionIds: [] };
 
 test('configuration is saved atomically at the editing revision; stale rejection is not reported as success', async () => {
   let snapshot = { status: 'ready', value: settings };
   const form = { async mutate(ops, revision) {
     assert.equal(revision, 5);
-    assert.equal(ops.length, 6);
+    assert.equal(ops.length, 7);
     assert.equal(ops.find(op => op.path[0] === 'modelSize').value, '1.7B');
   }, getSnapshot: () => snapshot };
   await saveSettings(form, settings, 5);

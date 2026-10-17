@@ -25,7 +25,7 @@ def backend_dir():
 
 class TestAudioopRequirements:
     def test_requirements_declare_audioop_lts_for_python_313(self, backend_dir):
-        content = (backend_dir / "requirements.txt").read_text()
+        content = (backend_dir / "requirements.txt").read_text(encoding="utf-8")
         assert re.search(
             r"^audioop-lts.*python_version\s*>=\s*['\"]3\.13['\"]",
             content,

@@ -1,9 +1,9 @@
-import React, { useEffect, useState, useSyncExternalStore } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import { speechFetch } from './controller.js';
 import { saveSettings } from './settings.js';
 
 const LANGUAGES = [['', '跟随声音档案'], ['zh', '中文'], ['en', 'English'], ['ja', '日本語'], ['ko', '한국어'], ['de', 'Deutsch'], ['fr', 'Français'], ['ru', 'Русский'], ['pt', 'Português'], ['es', 'Español'], ['it', 'Italiano']];
-const defaults = { endpoint: 'http://127.0.0.1:17493', clientId: 'dsh-voicebox', profile: '', language: '', modelSize: '0.6B', sessionIds: [] };
+const defaults = { endpoint: 'http://127.0.0.1:17493', clientId: 'dsh-voicebox', profile: '', language: '', modelSize: '0.6B', readingMode: 'complete', sessionIds: [] };
 
 export function VoiceboxSettings({ form, controller, view }) {
   const state = useSyncExternalStore(fn => form.subscribe(fn), () => form.getSnapshot());
@@ -20,6 +20,7 @@ export function VoiceboxSettings({ form, controller, view }) {
   useEffect(() => {
     if (!dirty && !busy && state.value) { setDraft({ ...defaults, ...state.value }); setSessionText((state.value.sessionIds || []).join('\n')); setRevision(state.revision); }
   }, [state.value, state.revision, dirty, busy]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: refresh and the saved endpoint intentionally invalidate the host-proxied request.
   useEffect(() => {
     if (view === 'summary') return;
     const abort = new AbortController();
@@ -49,6 +50,12 @@ export function VoiceboxSettings({ form, controller, view }) {
     <h3>语音播报设置</h3>
     <p>设置保存在 DSH 当前配置中，供各会话的手动朗读和自动播报共用。</p>
     <fieldset disabled={unavailable || busy}>
+      <label htmlFor="voicebox-reading-mode">自动播报方式</label>
+      <select id="voicebox-reading-mode" value={draft.readingMode} onChange={event => edit('readingMode', event.target.value)}>
+        <option value="complete">完整回复后朗读</option>
+        <option value="streaming">边回答边读</option>
+      </select>
+      <small>边回答边读按正文分句播放，跳过推理和工具参数；发生重试时停止本轮播报。会话内仍需开启自动播报。</small>
       <label htmlFor="voicebox-model">语音模型</label>
       <select id="voicebox-model" value={draft.modelSize} onChange={event => edit('modelSize', event.target.value)}>
         <option value="0.6B">Qwen3-TTS Base · 0.6B（响应更快）</option>
@@ -79,9 +86,9 @@ export function VoiceboxSettings({ form, controller, view }) {
       </details>
       <div className="dsh-voicebox-config-actions"><button type="submit" disabled={!dirty || loadingProfiles || profiles.some(profile => profile.id === draft.profile && !profile.compatible)}>{busy ? '保存中…' : '保存设置'}</button><button type="button" disabled={!dirty} onClick={discard}>放弃修改</button></div>
     </fieldset>
-    {unavailable && <p role="status">{state.status === 'loading' ? '正在读取插件配置…' : '当前配置不可写，请先启用 Voicebox 插件。'}</p>}
+    {unavailable && <output>{state.status === 'loading' ? '正在读取插件配置…' : '当前配置不可写，请先启用 Voicebox 插件。'}</output>}
     {dirty && state.revision !== revision && <p role="alert">配置已在其他位置更新，请放弃修改后重新编辑。</p>}
-    {message && <p role="status">{message}</p>}
+    {message && <output>{message}</output>}
   </form>;
 }
 
@@ -89,6 +96,7 @@ export const SETTINGS_CSS = `
 .dsh-voicebox-config{max-width:680px;color:inherit;font:inherit}
 .dsh-voicebox-config h3{margin:0 0 8px;font-size:16px}
 .dsh-voicebox-config p,.dsh-voicebox-config small{font-size:12px;line-height:1.6;opacity:.8}
+.dsh-voicebox-config>output{display:block;margin:12px 0;font-size:12px;line-height:1.6}
 .dsh-voicebox-config fieldset{border:0;padding:0;margin:16px 0;min-width:0}
 .dsh-voicebox-config label{display:block;font-size:13px;margin:18px 0 8px}
 .dsh-voicebox-config select,.dsh-voicebox-config input,.dsh-voicebox-config textarea{box-sizing:border-box;width:100%;padding:9px 10px;border:1px solid var(--dsw-alias-border-default,rgba(127,127,127,.4));border-radius:var(--dsw-alias-border-radius-sm,4px);font:inherit;color:inherit;background:var(--dsw-alias-background-primary,transparent)}

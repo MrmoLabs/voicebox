@@ -47,7 +47,7 @@ function App() {
       <p>{event.data.message.content.filter(b => b.type === 'text').map(b => b.text).join('\n')}</p>
       <div data-clock="end" style={{ display: 'flex', alignItems: 'center', gap: 8 }}><span style={{ fontSize: 12, color: '#737373' }}>复制</span><actions.Component {...actions.props} sessionId="preview" messageId={event.data.message.id} /></div>
     </article>)}
-    <section><button onClick={() => {
+    <section><button type="button" onClick={() => {
       const next = turn + 1; setTurn(next);
       const delta = [durable('turn/start', { turn: next }), durable('user/message', { source: { kind: 'user' } }),
         durable('assistant/message', { turn: next, message: { id: `preview-${next}`, content: [{ type: 'thinking', text: 'Never read this' }, { type: 'text', text: `这是第 ${next} 条回复。测试流式语音播放、暂停和中断。` }] } }),
@@ -55,8 +55,8 @@ function App() {
       entries.push(...delta);
       events.set({ revision: ++revision, entries: [...entries], change: { kind: 'append', entries: delta } });
     }}>模拟 AI 完整回复</button>
-    <button onClick={() => { session.set({ subagent: null, pendingSubmissions: [{}] }); session.set({ subagent: null, pendingSubmissions: [] }); }}>模拟发送新消息</button>
-    <button onClick={() => setOpen(!open)}>{open ? '切走会话' : '返回会话'}</button></section>
+    <button type="button" onClick={() => { session.set({ subagent: null, pendingSubmissions: [{}] }); session.set({ subagent: null, pendingSubmissions: [] }); }}>模拟发送新消息</button>
+    <button type="button" onClick={() => setOpen(!open)}>{open ? '切走会话' : '返回会话'}</button></section>
     <p>已收到 {turn} 条新回复。</p>
   </main>;
 }

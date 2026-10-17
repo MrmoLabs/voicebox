@@ -51,7 +51,7 @@ function store(value) {
   return { getSnapshot: () => value, subscribe: (fn) => { listeners.add(fn); return () => listeners.delete(fn); }, set(next) { value = next; for (const fn of listeners) fn(); } };
 }
 
-test('Desktop controls use the shell fetch bridge, stop on submit and switch, and never replay restored replies', async (t) => {
+test('Desktop keeps manual and automatic speech in the background, stops on submit and session switch, and never replays restored replies', async (t) => {
   const previous = Object.fromEntries(['window', 'document', 'localStorage', 'AudioContext', '__DSH_TRANSPORT__'].map((key) => [key, globalThis[key]]));
   t.after(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete globalThis[key]; else globalThis[key] = value; } });
   globalThis.window = new EventTarget();
@@ -67,7 +67,7 @@ test('Desktop controls use the shell fetch bridge, stop on submit and switch, an
   const events = store(snapshot(1, [start, user, reply('History'), end], 'replace'));
   const session = store({ subagent: null, pendingSubmissions: [] });
   const list = store({ current: 's1', byId: { s1: {}, s2: {} } });
-  const controller = new DesktopSpeechController({ sessions: { list, binding: () => ({ eventSource: events, session }) } }, async (job, base, signal) => {
+  const controller = new DesktopSpeechController({ sessions: { list, binding: () => ({ eventSource: events, session }) } }, async (job, _base, signal) => {
     plays.push({ job, signal });
     await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
   });
@@ -90,6 +90,15 @@ test('Desktop controls use the shell fetch bridge, stop on submit and switch, an
   assert.equal(calls.filter(c => c.path === '/speak').at(-1).body.text, 'History');
   assert.equal(controller.state.activeMessageId, 'message-History');
   assert.equal(plays[0].signal.aborted, true);
+  const cancelledBeforeBlur = calls.filter(c => c.path === '/speak/cancel').length;
+  window.dispatchEvent(new Event('blur'));
+  document.hidden = true;
+  document.hasFocus = () => false;
+  document.dispatchEvent(new Event('visibilitychange'));
+  await controller.bridge.idle();
+  assert.equal(plays[1].signal.aborted, false, 'manual reading survives focus loss and minimization');
+  assert.equal(controller.state.activeMessageId, 'message-History');
+  assert.equal(calls.filter(c => c.path === '/speak/cancel').length, cancelledBeforeBlur);
   await controller.unlock();
   controller.pause();
   await Promise.resolve();
@@ -109,11 +118,20 @@ test('Desktop controls use the shell fetch bridge, stop on submit and switch, an
   assert.equal(plays.length, 3, 'autoplay resumes the previously unlocked context after stopping a paused reply');
   list.set({ current: 's2', byId: { s1: {}, s2: {} } });
   controller.select('s2');
+  assert.equal(plays[2].signal.aborted, true, 'switching DSH sessions still stops the old reply');
   assert.equal(controller.state.latest, 'After pause');
   assert.equal(calls.filter((c) => c.path === '/speak').length, 3);
-  document.hidden = true;
   events.set(snapshot(5, [start, user, reply('Background'), end]));
   await controller.bridge.idle();
-  assert.equal(calls.filter((c) => c.path === '/speak').length, 3);
+  assert.equal(calls.filter((c) => c.path === '/speak').length, 4, 'enabled selected session still receives complete replies in the background');
+  assert.equal(plays[3].signal.aborted, false);
+  document.hidden = false;
+  document.hasFocus = () => true;
+  document.dispatchEvent(new Event('visibilitychange'));
+  window.dispatchEvent(new Event('focus'));
+  await controller.bridge.idle();
+  assert.equal(calls.filter(c => c.path === '/speak').length, 4, 'returning to Desktop must not replay the reply');
+  controller.toggle();
+  assert.equal(plays[3].signal.aborted, true, 'turning off automatic reading still stops background playback');
   await controller.dispose();
 });

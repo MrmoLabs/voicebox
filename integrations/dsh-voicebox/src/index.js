@@ -9,6 +9,7 @@ export const Config = Schema.object({
   profile: Schema.string().default('').description('音色名称或 ID；留空使用 Voicebox 客户端绑定或默认音色'),
   language: Schema.string().default('').description('语言代码；留空使用音色的语言'),
   modelSize: Schema.union(['0.6B', '1.7B']).default('0.6B').description('Qwen 流式语音模型大小'),
+  readingMode: Schema.union(['complete', 'streaming']).default('complete').description('自动播报方式：完整回复或边回答边读'),
   sessionIds: Schema.array(Schema.string()).default([]).description('允许播报的会话 ID；留空允许全部普通会话'),
 }).volatile();
 

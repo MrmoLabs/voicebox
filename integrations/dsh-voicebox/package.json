@@ -1,7 +1,7 @@
 {
   "name": "dsh-voicebox",
   "version": "0.1.0",
-  "description": "Read completed DeepSeek Harness replies through local Voicebox streaming speech.",
+  "description": "Read DeepSeek Harness replies as they stream or finish through local Voicebox speech.",
   "type": "module",
   "main": "lib/index.js",
   "exports": {

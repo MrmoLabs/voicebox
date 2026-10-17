@@ -139,10 +139,11 @@ def test_hf_progress_tracker():
 
             # Simulate downloading a file
             print("  Simulating download with tqdm...")
-            total_size = 1000
+            # The tracker deliberately suppresses totals below 1 MB.
+            total_size = 2_000_000
             with tqdm(total=total_size, desc="model.bin", unit="B", unit_scale=True) as pbar:
-                for chunk in range(0, total_size, 100):
-                    pbar.update(100)
+                for chunk in range(0, total_size, 200_000):
+                    pbar.update(200_000)
                     time.sleep(0.01)
 
             print(f"  Captured {len(captured_progress)} progress updates")

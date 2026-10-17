@@ -29,7 +29,7 @@ function nextAudio(reader: ReadableStreamDefaultReader<Uint8Array>, signal: Abor
 export async function playAgentSpeech(
   job: AgentSpeechJob, baseUrl: string, signal: AbortSignal,
   update: (elapsedMs: number) => void,
-  options: { fetch?: typeof fetch; context?: AudioContext } = {},
+  options: { fetch?: typeof fetch; context?: AudioContext; resume?: boolean } = {},
 ) {
   const id = encodeURIComponent(job.generation_id);
   if (!job.stream_audio) {
@@ -50,7 +50,7 @@ export async function playAgentSpeech(
   };
   signal.addEventListener('abort', halt, { once: true });
   try {
-    await context.resume();
+    if (options.resume !== false) await context.resume();
     if (signal.aborted) throw abortError();
     const response = await (options.fetch ?? fetch)(`${baseUrl}/generate/${id}/live`, { signal });
     if (!response.ok || !response.body) throw new Error('Live speech is unavailable');

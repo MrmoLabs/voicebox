@@ -117,7 +117,7 @@ export class SpeechBridge {
     return this.capabilities;
   }
 
-  async speak(sessionId, requestId, text, epoch) {
+  async speak(sessionId, requestId, text, epoch, { notify = true } = {}) {
     await this.barriers.get(sessionId);
     await this.checkCapabilities();
     if (this.disposed || this.epochs.get(sessionId) !== epoch || this.active !== sessionId) return;
@@ -134,7 +134,8 @@ export class SpeechBridge {
         playback_owner: this.config.playbackOwner || 'voicebox',
       });
       if (!this.disposed && this.epochs.get(sessionId) === epoch && this.active === sessionId) {
-        this.onSpeech?.(result);
+        if (notify) this.onSpeech?.(result);
+        return result;
       }
     } catch (error) {
       // A timeout can hide a successful POST. Cancel by stable request id;

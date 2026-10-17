@@ -1,4 +1,4 @@
-import React, { useLayoutEffect, useSyncExternalStore } from 'react';
+import { useLayoutEffect, useSyncExternalStore } from 'react';
 import { DesktopSpeechController } from './controller.js';
 import { playAgentSpeech } from '../../../app/src/lib/audio/agentSpeechPlayback.ts';
 import { VoiceboxSettings, SETTINGS_CSS } from './settings.jsx';
@@ -29,7 +29,7 @@ function SpeechIcon({ kind }) {
     {kind === 'loading' && <path d="M20 12a8 8 0 1 1-5.5-7.6" />}
     {kind === 'stop' && <rect x="6" y="6" width="12" height="12" rx="1" fill="currentColor" stroke="none" />}
     {kind === 'play' && <path d="m8 5 11 7-11 7z" fill="currentColor" stroke="none" />}
-    {kind === 'pause' && <><path d="M8 5v14M16 5v14" strokeWidth="3" /></>}
+    {kind === 'pause' && <path d="M8 5v14M16 5v14" strokeWidth="3" />}
   </svg>;
 }
 
@@ -40,10 +40,15 @@ export function VoiceControls({ controller, sessionId }) {
     return () => controller.select(undefined);
   }, [controller, sessionId]);
   const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot);
-  return <div className="dsh-voicebox-setting" aria-label="Voicebox 自动播报设置">
+  return <div className="dsh-voicebox-setting">
     <button type="button" disabled={!sessionId} aria-pressed={state.enabled} onClick={() => controller.toggle()}
       title="自动朗读当前会话的新回复；播放控制位于对应回复下方">自动播报{state.enabled ? '：开' : '：关'}</button>
-    {state.phase === 'error' && !state.activeMessageId && <span role="status" title={state.error}>语音不可用</span>}
+    {state.live && !state.turnFinished && state.activeTurn !== undefined && <span className="dsh-voicebox-inline">
+      <button type="button" className="dsh-voicebox-icon" aria-label="停止本轮播报" title="停止本轮播报" onClick={() => controller.stop()}><SpeechIcon kind="stop" /></button>
+      {['playing', 'paused'].includes(state.phase) && <button type="button" className="dsh-voicebox-icon" aria-label={state.phase === 'paused' ? '继续朗读' : '暂停朗读'} title={state.phase === 'paused' ? '继续朗读' : '暂停朗读'} onClick={() => controller.pause()}><SpeechIcon kind={state.phase === 'paused' ? 'play' : 'pause'} /></button>}
+      <output className="dsh-voicebox-status" title={state.error || '回复完成后，播放控制移至回复下方'}>{state.phase === 'error' ? '本轮播报已停止' : state.phase === 'paused' ? '已暂停' : state.waitingForText ? '等待下一段正文…' : state.phase === 'buffering' ? '正在生成语音…' : `边回答边读 ${Math.floor(state.elapsed / 1000)}s`}</output>
+    </span>}
+    {state.phase === 'error' && !state.activeMessageId && <output title={state.error}>语音不可用</output>}
   </div>;
 }
 
@@ -62,19 +67,20 @@ export function MessageVoiceControls({ controller, sessionId, messageId }) {
     else if (phase === 'paused') controller.pause();
     else controller.read(messageId);
   };
-  return <span className="dsh-voicebox-inline" data-active={active} aria-label="回复语音播报">
+  return <span className="dsh-voicebox-inline" data-active={active}>
     <button type="button" className="dsh-voicebox-icon" aria-label={label} title={label} aria-busy={phase === 'buffering' || undefined}
       disabled={controller.sessionId !== sessionId || !controller.messageText(messageId)} onClick={primary}>
       <SpeechIcon kind={kind} />
     </button>
     {phase === 'playing' && <button type="button" className="dsh-voicebox-icon" aria-label="暂停朗读" title="暂停朗读" onClick={() => controller.pause()}><SpeechIcon kind="pause" /></button>}
     {phase === 'paused' && <button type="button" className="dsh-voicebox-icon" aria-label="停止朗读" title="停止朗读" onClick={() => controller.stop()}><SpeechIcon kind="stop" /></button>}
-    {status && <span className="dsh-voicebox-status" role="status" title={phase === 'error' ? state.error : status}>{status}</span>}
+    {status && <output className="dsh-voicebox-status" title={phase === 'error' ? state.error : status}>{status}</output>}
   </span>;
 }
 
 export function apply(ctx) {
-  const controller = new DesktopSpeechController(ctx, playAgentSpeech);
+  const form = ctx.configForms.get('voicebox');
+  const controller = new DesktopSpeechController(ctx, playAgentSpeech, form);
   ctx.effect(() => () => controller.dispose(), 'voicebox: client playback');
   ctx.effect(() => {
     const style = document.createElement('style'); style.textContent = CSS + SETTINGS_CSS; document.head.appendChild(style);
@@ -90,6 +96,6 @@ export function apply(ctx) {
   }, MessageVoiceControls));
   ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register({
     name: 'plugins.bundle.config', key: 'dsh-voicebox',
-    inject: () => ({ form: ctx.configForms.get('voicebox'), controller }),
+    inject: () => ({ form, controller }),
   }, VoiceboxSettings));
 }

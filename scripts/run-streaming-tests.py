@@ -11,6 +11,8 @@ sys.path[:0] = [str(workspace / 'backend/vendor'), str(workspace), str(portable 
 site.addsitedir(str(portable / 'site-packages'))
 site.addsitedir(str(internal))
 site.addsitedir(str(Path(os.environ['APPDATA']) / 'Python/Python312/site-packages'))
+# CLI subprocesses need the same installed dependencies as the test process.
+os.environ['PYTHONPATH'] = os.pathsep.join(sys.path)
 handles = [os.add_dll_directory(str(path)) for path in (internal, internal / 'torch/lib') if path.is_dir()]
 numba_cache = workspace / '.tmp-stream-test-numba'
 numba_cache.mkdir(exist_ok=True)
@@ -24,5 +26,6 @@ tests = ['test_live_audio', 'test_generation_progress', 'test_generation_progres
          'test_generation_engine_resolution', 'test_voice_prompt_cache_unload', 'test_qwen_load_concurrency',
          'test_models_load_by_name', 'test_model_runtime', 'test_audiobooks', 'test_designed_profiles']
 tests += ['test_speak_dispatch', 'test_speak_language', 'test_mcp_speak']
-sys.exit(pytest.main((sys.argv[1:] or [f'backend/tests/{test}.py' for test in tests]) +
-    ['-q', '-p', 'no:cacheprovider', '-p', 'pytest_asyncio.plugin', '--asyncio-mode=auto', '--disable-warnings', '--tb=short']))
+if __name__ == '__main__':
+    sys.exit(pytest.main((sys.argv[1:] or [f'backend/tests/{test}.py' for test in tests]) +
+        ['-q', '-p', 'no:cacheprovider', '-p', 'pytest_asyncio.plugin', '--asyncio-mode=auto', '--disable-warnings', '--tb=short']))
