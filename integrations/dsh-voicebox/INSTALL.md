@@ -31,6 +31,7 @@
 
 - 更新前保留旧插件安装包及当前插件配置副本；在现有语音播放结束后操作。
 - 安装新的 `.tgz` 使用同一命令与同一 profile，随后重新加载，并检查模型、声音档案和自动朗读偏好。
+- 尚未发布的开发候选若反复重建同一版本，请使用带提交号的新文件名，例如 `dsh-voicebox-0.2.0-beta.2-9cfcdec.tgz`，并核对构建摘要；覆盖原路径后再次安装可能命中包管理器旧缓存。正式分发的同版本包应保持内容不变。
 - 如需回退，重新安装保留的旧 `.tgz` 并重新加载。插件回退不会自动回退 Voicebox 后端；需要同时核对配套服务的接口能力。
 - 本候选没有修改配置 schema 中现有字段，也没有数据库迁移。跨未来版本仍应先在测试 profile 验证回退。
 - 卸载可使用 `dsh plugin --profile desktop remove dsh-voicebox`。插件结束时会释放监听和播放资源，不应删除 Voicebox 声音或模型。
@@ -55,6 +56,6 @@ $env:VOICEBOX_DSH_DESKTOP='D:/Program/DSHDesktop'
 bun run verify:dsh
 ```
 
-它在仓库 `.tmp-dsh-package-*` 目录建立独立 `DSH_HOME`，通过官方 CLI / pnpm 安装、升级与回退；每一步核对配置组合，并使用该已安装版本的真实 Cordis / Connection / SessionStore 测试打包插件。使用随附的 Web profile 模板，不启动或退出正在使用的 Desktop，不复用用户凭据与会话；因此仍不能代替原生窗口首次安装验收。结果保存在 `dsh-install-verification.json`。
+它在仓库 `.tmp-dsh-package-*` 目录建立独立 `DSH_HOME`，通过官方 CLI / pnpm 安装、升级与回退；每一步核对配置组合与已安装宿主 / 客户端文件的 SHA-256，确认与实际安装包一致，并使用该已安装版本的真实 Cordis / Connection / SessionStore 测试打包插件。使用随附的 Web profile 模板，不启动或退出正在使用的 Desktop，不复用用户凭据与会话；因此仍不能代替原生窗口首次安装验收。结果保存在 `dsh-install-verification.json`。
 
 同一脚本还使用当前源码的 VoiceContext，在已安装的真实 AgentLoop 中执行脚本模型续讲验收；不调用远程模型，不把“已解释”当成“已听完”。原生 Desktop 的全新 profile 仍需要用户完成它自己的首次认证引导，插件不会复制其他 profile 的凭据。

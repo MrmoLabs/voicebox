@@ -6,6 +6,7 @@ import { copyFile, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { verifyInstalledArtifact } from './verify-artifact.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const plugin = path.join(root, 'integrations/dsh-voicebox');
@@ -43,17 +44,18 @@ for (const file of ['lib/index.js', 'lib/client.js', 'lib/build-info.json', 'LIC
   assert(contents.includes(`package/${file}`), `Missing distribution file: ${file}`);
 }
 assert(!contents.some(file => /(?:^|\/)(?:node_modules|data|\.git|\.venv|release)(?:\/|$)/.test(file)));
-await writeFile(path.join(install, 'package.json'), JSON.stringify({ private: true, type: 'module',
-  dependencies: { '@deepseek-ai/cordis': '4.0.5', react: '18.3.1' } }, null, 2) + '\n', 'utf8');
+await writeFile(path.join(install, 'package.json'), `${JSON.stringify({ private: true, type: 'module',
+  dependencies: { '@deepseek-ai/cordis': '4.0.5', react: '18.3.1' } }, null, 2)}\n`, 'utf8');
 await copyFile(new URL('./verify-installed.mjs', import.meta.url), path.join(install, 'verify.mjs'));
 const stages = [];
 for (const [index, label] of [[0, 'install-baseline'], [1, 'upgrade-candidate'], [0, 'rollback-baseline']]) {
   run(bun, ['add', '--ignore-scripts', `dsh-voicebox@file:${archives[index].replaceAll('\\', '/')}`], install);
   const result = JSON.parse(run('node', ['verify.mjs', index === 0 ? previous.version : next.version], install));
-  stages.push({ stage: label, ...result });
+  const artifactHashes = await verifyInstalledArtifact(archives[index], path.join(install, 'node_modules/dsh-voicebox'));
+  stages.push({ stage: label, ...result, artifactHashes });
 }
 const digests = {};
 for (const archive of archives) digests[path.basename(archive)] = createHash('sha256').update(await readFile(archive)).digest('hex');
-await writeFile(path.join(output, 'verification.json'), JSON.stringify({ baseline, isolated, stages, sha256: digests,
-  scope: 'Fresh dependency root; packaged host/client imports and version changes. No native Desktop installer, inference or hardware audio.' }, null, 2) + '\n', 'utf8');
+await writeFile(path.join(output, 'verification.json'), `${JSON.stringify({ baseline, isolated, stages, sha256: digests,
+  scope: 'Fresh dependency root; packaged host/client imports and version changes. No native Desktop installer, inference or hardware audio.' }, null, 2)}\n`, 'utf8');
 console.log(JSON.stringify({ output, isolated, stages, sha256: digests }, null, 2));
