@@ -309,6 +309,44 @@ test('late microphone grants are closed; empty speech is ignored; rejected sends
   assert.match(broken.service.state.error, /TTS disconnected/); broken.service.dispose();
 });
 
+test('microphone failure can restart cleanly while old recognition and device callbacks arrive late', async t => {
+  const owners = [], closed = [];
+  let lateRecognition, listens = 0;
+  const h = harness({
+    capture: async options => { const owner = owners.length; owners.push(options); return { echoCancellation: true, close: () => closed.push(owner), setMuted() {} }; },
+    listen: () => ++listens === 1 ? new Promise(resolve => { lateRecognition = resolve; }) : Response.json({ text: '新的问题。' }),
+  });
+  t.after(() => { lateRecognition?.(Response.json({ text: '' })); h.service.dispose(); });
+  await h.service.start(); const oldEpoch = h.service.contextEpoch;
+  const oldInput = h.service.sendAudio(wav()); await tick();
+  owners[0].failed(new Error('麦克风已断开'));
+  assert.equal(h.service.state.active, false); assert.equal(h.service.state.phase, 'error');
+  assert.equal(h.service.contextHeartbeat, undefined); assert.equal(h.service.input, undefined);
+  assert.deepEqual(closed, [0]); assert.equal(h.calls.length, 0);
+  await h.service.start(); assert.notEqual(h.service.contextEpoch, oldEpoch);
+  assert.equal(h.service.state.active, true); assert.equal(h.service.state.error, '');
+  owners[0].failed(new Error('旧设备迟到的错误'));
+  lateRecognition(Response.json({ text: '旧录音不可发送。' })); await oldInput;
+  assert.equal(h.service.state.active, true); assert.equal(h.calls.length, 0);
+  await h.service.sendAudio(wav());
+  assert.equal(h.calls.length, 1); assert.equal(h.calls[0].content[0].text, '新的问题。');
+  h.service.end(); assert.deepEqual(closed, [0, 1]);
+});
+
+test('an unavailable transcription service ends capture and a deliberate restart sends only a new recording', async t => {
+  let available = false;
+  const h = harness({ listen: () => available ? Response.json({ text: '恢复后的提问。' }) : Response.json({ error: 'ASR unavailable' }, { status: 503 }) });
+  t.after(() => h.service.dispose());
+  await h.service.start(); await h.service.sendAudio(wav());
+  assert.equal(h.service.state.active, false); assert.match(h.service.state.error, /ASR unavailable/);
+  assert.equal(h.closed.length, 1); assert.equal(h.calls.length, 0); assert.equal(h.service.contextHeartbeat, undefined);
+  available = true; await h.service.start();
+  assert.equal(h.calls.length, 0, 'a failed recording must not be retried on reconnection');
+  await h.service.sendAudio(wav());
+  assert.equal(h.calls.length, 1); assert.equal(h.calls[0].content[0].text, '恢复后的提问。');
+  h.service.end(); assert.equal(h.closed.length, 2);
+});
+
 test('host forwards only validated microphone WAV and pins Whisper settings without implicit downloads', async () => {
   const requests = [];
   const proxy = new VoiceboxProxy({ recognitionModel: 'small', recognitionLanguage: 'zh', sessionIds: ['s'] }, async (url, init) => {

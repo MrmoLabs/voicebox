@@ -87,46 +87,64 @@ const WORKLET = `class VoiceboxCapture extends AudioWorkletProcessor {
 
 export async function openMicrophone({ deviceId, signal, frame, failed }) {
   if (!navigator.mediaDevices?.getUserMedia) throw new Error('当前窗口无法访问麦克风，请检查 Desktop 麦克风权限');
-  let stream, context, source, processor, gain, url;
+  let stream, context, source, processor, gain, url, closed = false, failure;
+  const ended = new Map();
   const close = () => {
+    closed = true;
     signal.removeEventListener('abort', close);
-    for (const track of stream?.getTracks() || []) track.stop();
+    for (const [track, listener] of ended) track.removeEventListener('ended', listener);
+    ended.clear();
     if (processor?.port) processor.port.onmessage = null;
-    if (processor) processor.onaudioprocess = null;
+    if (processor) { processor.onaudioprocess = null; processor.onprocessorerror = null; }
     source?.disconnect(); processor?.disconnect(); gain?.disconnect();
     if (context && context.state !== 'closed') void context.close().catch(() => {});
+    for (const track of stream?.getTracks() || []) track.stop();
     if (url) { URL.revokeObjectURL(url); url = undefined; }
+    stream = context = source = processor = gain = undefined;
+  };
+  const check = () => {
+    signal.throwIfAborted();
+    if (closed) throw failure || new Error('录音已关闭，请重新开始语音对话');
+  };
+  const fail = error => {
+    if (closed || signal.aborted) return;
+    failure = error; close(); failed(error);
   };
   signal.addEventListener('abort', close, { once: true });
   try {
-    signal.throwIfAborted();
+    check();
     stream = await navigator.mediaDevices.getUserMedia({ audio: {
       channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true,
       ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
     } });
-    signal.throwIfAborted();
+    check();
+    for (const track of stream.getAudioTracks()) {
+      if (track.readyState === 'ended') throw new Error('麦克风已断开，请重新开始语音对话');
+      const listener = () => fail(new Error('麦克风已断开，请重新开始语音对话'));
+      track.addEventListener('ended', listener); ended.set(track, listener);
+    }
     context = new AudioContext();
     await context.resume();
-    signal.throwIfAborted();
+    check();
     source = context.createMediaStreamSource(stream);
     gain = context.createGain(); gain.gain.value = 0; gain.connect(context.destination);
     if (context.audioWorklet) {
       try {
         url = URL.createObjectURL(new Blob([WORKLET], { type: 'text/javascript' }));
         await context.audioWorklet.addModule(url);
-        signal.throwIfAborted();
+        check();
         processor = new AudioWorkletNode(context, 'voicebox-capture', { channelCount: 1, channelCountMode: 'explicit' });
-        processor.port.onmessage = event => { if (!signal.aborted) frame(event.data, context.sampleRate); };
-      } catch (error) { if (signal.aborted) throw error; }
+        processor.port.onmessage = event => { if (!closed && !signal.aborted) frame(event.data, context.sampleRate); };
+        processor.onprocessorerror = () => fail(new Error('录音处理已中断，请重新开始语音对话'));
+      } catch { check(); }
     }
     // Some Desktop CSP policies disallow blob worklet modules.
     if (!processor) {
       processor = context.createScriptProcessor(1024, 1, 1);
-      processor.onaudioprocess = event => { if (!signal.aborted) frame(event.inputBuffer.getChannelData(0).slice(), context.sampleRate); };
+      processor.onaudioprocess = event => { if (!closed && !signal.aborted) frame(event.inputBuffer.getChannelData(0).slice(), context.sampleRate); };
     }
     source.connect(processor); processor.connect(gain);
-    for (const track of stream.getAudioTracks()) track.addEventListener('ended', () => { if (!signal.aborted) failed(new Error('麦克风已断开，请重新开始语音对话')); });
-    return { close, setMuted: muted => { for (const track of stream.getAudioTracks()) track.enabled = !muted; },
+    return { close, setMuted: muted => { for (const track of stream?.getAudioTracks() || []) track.enabled = !muted; },
       echoCancellation: stream.getAudioTracks()[0]?.getSettings().echoCancellation === true };
   } catch (error) { close(); throw error; }
 }
