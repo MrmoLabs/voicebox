@@ -38,6 +38,37 @@ test('endpointing ignores clicks, retains speech across short pauses and bounds 
   assert.equal(view.getInt16(44, true), Math.trunc(.2 * 32767));
 });
 
+test('starting capture tolerates normal gaps between voiced syllables without accepting isolated clicks', () => {
+  const clips = []; let starts = 0;
+  const detector = new UtteranceDetector({ sampleRate: 16000, started: () => starts++, utterance: bytes => clips.push(bytes) });
+  // Five short voiced syllables, none individually 250 ms long.
+  for (let group = 0; group < 5; group++) {
+    for (let n = 0; n < 3; n++) detector.push(pcm());
+    for (let n = 0; n < 2; n++) detector.push(pcm(0));
+  }
+  assert.equal(starts, 1, 'speech onset accumulates across short unvoiced gaps');
+  for (let n = 0; n < 125; n++) detector.push(pcm(0));
+  assert.equal(clips.length, 1);
+  // A short click every 400 ms must not accumulate into speech over time.
+  for (let group = 0; group < 10; group++) {
+    for (let n = 0; n < 4; n++) detector.push(pcm());
+    for (let n = 0; n < 16; n++) detector.push(pcm(0));
+  }
+  detector.finish(); assert.equal(starts, 1); assert.equal(clips.length, 1);
+});
+
+test('barge-in onset also tolerates syllable gaps while keeping its longer noise guard', () => {
+  let starts = 0;
+  const detector = new UtteranceDetector({ sampleRate: 16000, startMs: 450, started: () => starts++, utterance() {} });
+  for (let group = 0; group < 4; group++) {
+    for (let n = 0; n < 5; n++) detector.push(pcm());
+    for (let n = 0; n < 2; n++) detector.push(pcm(0));
+  }
+  assert.equal(starts, 0, '400 ms voiced audio still falls below the barge-in threshold');
+  for (let n = 0; n < 3; n++) detector.push(pcm());
+  assert.equal(starts, 1);
+});
+
 function harness({ allowInterrupt = false, listen, capture, context } = {}) {
   const submissions = [], cancels = [], calls = [], closed = [], modes = [], holds = [], contexts = [];
   let feed;
@@ -76,6 +107,19 @@ function harness({ allowInterrupt = false, listen, capture, context } = {}) {
   }, capture || (async options => { feed = options.frame; return { echoCancellation: true, close: () => closed.push(true), setMuted() {} }; }));
   return { service, session, speaker, form, submissions, cancels, calls, closed, modes, holds, contexts, feed: (...args) => feed(...args) };
 }
+
+test('a newly ready idle call accepts its first fragmented utterance without a hidden cooldown', async t => {
+  const h = harness(); t.after(() => h.service.dispose());
+  await h.service.start();
+  assert.equal(h.service.state.phase, 'listening');
+  for (let group = 0; group < 5; group++) {
+    for (let n = 0; n < 3; n++) h.feed(pcm(), 16000);
+    for (let n = 0; n < 2; n++) h.feed(pcm(0), 16000);
+  }
+  assert.equal(h.service.state.phase, 'capturing');
+  for (let n = 0; n < 125; n++) h.feed(pcm(0), 16000);
+  await tick(); assert.equal(h.calls.length, 1); assert.equal(h.submissions.length, 1);
+});
 
 test('recording, delayed recognition and official submission report pending input until the turn is accepted', async t => {
   let recognize, accept;

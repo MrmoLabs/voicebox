@@ -147,6 +147,17 @@ try {
   assert.equal(script.length, 0); assert.equal(voice.state(agent.session.id).plan, multiParent);
   assert.equal(multiParent.covered.get('u1'), cost);
 
+  const plainParent = setupParent();
+  script.push(branch('resume', '这个函数用于转换输入格式。'), [...text('这个局部问题已解释。'), finish]);
+  await send('等等，为什么要用这个函数？');
+  assert.equal(voice.state(agent.session.id).returnPlan, plainParent, 'ordinary first interruption retains the original plan');
+  const plainDecision = stepOf('这个函数用于'), plainLast = stepOf('这个局部问题已解释');
+  await update(plainDecision); assert.equal(voice.state(agent.session.id).returnPlan, plainParent);
+  script.push(explain('u2', '普通插话后接回限制：仍需实际验证。'), [...text('原讲解接续完成。'), finish]);
+  await update([plainDecision, plainLast]); await agent.whenIdle();
+  assert.equal(script.length, 0); assert.equal(voice.state(agent.session.id).plan, plainParent);
+  assert.equal(plainParent.covered.get('u1'), cost);
+
   setupParent();
   script.push([...text('需要哪一种例子？'), finish]); await send('第二点详细解释');
   script.push(branch('abandon', '现在换成新问题，先讨论你的新需求。'), [...text('旧讲解不再继续。'), finish]);

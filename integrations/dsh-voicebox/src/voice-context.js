@@ -141,7 +141,9 @@ export class VoiceContext {
       const parent = state.plan || state.returnPlan;
       const continuing = intent.continuation && parent;
       const previous = intent.expandPrevious && state.plan ? state.plan.answer : this.answer(session, event.seq);
-      const carriedBranch = state.returnPlan && !continuing && !intent.restart && (!intent.expandPrevious || intent.scope === 'target');
+      // A first interruption need not contain an ordinal or other local-topic
+      // keyword. Keep the parent until the model decides resume/wait/abandon.
+      const carriedBranch = (state.returnPlan || (state.plan && !intent.temporary)) && !continuing && !intent.restart && (!intent.expandPrevious || intent.scope === 'target');
       state.returnPlan = !continuing && (intent.temporary || carriedBranch) ? parent : undefined;
       state.returnDecision = state.returnPlan ? carriedBranch ? 'pending' : 'auto' : undefined;
       state.returnPlan?.resumeUnheard();

@@ -282,6 +282,27 @@ test('a multi-turn local question retains its parent but requires an explicit br
   h.context.dispose(); assert.equal(h.tools.size, 0);
 });
 
+test('an ordinary first interruption preserves the detailed plan until the model chooses the topic boundary', async () => {
+  const h = host(); h.context.install(); await h.send('start');
+  const plan = new NarrationPlan({ text: '# 原理\n原理甲。\n# 示例\n示例乙。' }, '全部详细讲');
+  plan.cover(['u1'], '2:1'); plan.playedSteps.add('2:1');
+  const state = h.context.state('s'); state.plan = plan;
+  const start = { type: 'turn/start', data: { turn: 3 } }; h.session.log.push(start); h.context.observe(h.session, start);
+  h.context.observe(h.session, { type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '等等，为什么要用这个函数？' }] } });
+  assert.equal(state.returnPlan, plan, 'lack of an ordinal keyword must not discard the original explanation');
+  assert.equal(state.returnDecision, 'pending', 'an ambiguous interruption requires a semantic decision');
+  let wakes = 0; h.agent.status = 'idle'; h.agent.followup = () => wakes++;
+  const answer = { type: 'assistant/message', data: { turn: 3, step: 1, message: { content: [{ type: 'text', text: '因为这个函数负责转换输入。' }] } } };
+  h.session.log.push(answer); h.context.observe(h.session, answer);
+  h.hooks.get('agent/turn-stopping')({ agent: h.agent, signal: new AbortController().signal });
+  await h.send('update', { playback: { recent: '', current: '', pending: 0, completedSteps: ['3:1'] } });
+  assert.equal(wakes, 0, 'playback alone cannot choose whether the user changed topics');
+  await h.tools.get('voicebox_branch').execute({ action: 'resume' }, { agent: h.agent });
+  h.hooks.get('agent/status')({ agent: h.agent });
+  assert.equal(wakes, 1); assert.equal(state.plan, plan);
+  assert.deepEqual(plan.pending().map(unit => unit.id), ['u2']); h.context.dispose();
+});
+
 test('branch wait and abandon are scoped and cannot be overridden by later playback receipts', async () => {
   for (const action of ['wait', 'abandon']) {
     const h = host(); h.context.install(); await h.send('start');

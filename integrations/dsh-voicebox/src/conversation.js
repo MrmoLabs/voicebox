@@ -111,6 +111,7 @@ export class VoiceConversation {
     const allowed = this.settings().sessionIds;
     if (allowed?.length && !allowed.includes(id)) { this.update({ error: '当前会话不在 Voicebox 白名单中' }); return; }
     const abort = new AbortController(); this.abort = abort; this.session = session; this.id = id;
+    const startedBusy = this.busy();
     this.speaker.trace?.('call.start'); this.lastVisibility = undefined;
     this.update({ active: true, phase: 'starting', transcript: '', error: '', notice: '', confirming: false, muted: false, heard: undefined, awaitingAnswer: false });
     // Resume playback directly from this user gesture before awaiting network I/O.
@@ -143,6 +144,9 @@ export class VoiceConversation {
       this.microphone = microphone;
       this.update({ phase: 'listening', echoCancellation: this.microphone.echoCancellation, recognitionModel: status.model || this.settings().recognitionModel });
       this.onVisibility();
+      // A fresh idle call has no outgoing answer echo to drain. Once it says
+      // listening, accept the first words rather than discarding them for 350 ms.
+      if (!startedBusy && !this.busy()) this.coolUntil = undefined;
     } catch (error) { if (!abort.signal.aborted) this.fail(error, abort); }
   }
   refresh() {

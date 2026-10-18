@@ -6,20 +6,25 @@ export class UtteranceDetector {
     Object.assign(this, { sampleRate, silenceMs, startMs, started, utterance, quiet });
     this.reset();
   }
-  reset() { this.frames = []; this.prefix = []; this.duration = 0; this.speech = 0; this.silence = 0; this.active = false; this.candidate = 0; }
+  reset() { this.frames = []; this.prefix = []; this.prefixMs = 0; this.duration = 0; this.speech = 0; this.silence = 0; this.active = false; this.candidate = 0; }
   push(frame) {
     const ms = frame.length * 1000 / this.sampleRate;
     let power = 0;
     for (const value of frame) power += value * value;
     const voiced = Math.sqrt(power / frame.length) >= 0.015;
     if (!this.active) {
-      this.prefix.push(frame);
-      while (this.prefix.length > 1 && this.prefix.reduce((n, part) => n + part.length, 0) > this.sampleRate * 0.55) this.prefix.shift();
-      this.candidate = voiced ? this.candidate + ms : 0;
-      if (this.candidate < this.startMs) return;
+      // Count voiced time in a short rolling window. Normal unvoiced syllable
+      // gaps must not reset onset, while old clicks cannot accumulate forever.
+      this.prefix.push({ frame, ms, voiced }); this.prefixMs += ms;
+      if (voiced) this.candidate += ms;
+      while (this.prefix.length > 1 && this.prefixMs > this.startMs + 300) {
+        const removed = this.prefix.shift(); this.prefixMs -= removed.ms;
+        if (removed.voiced) this.candidate -= removed.ms;
+      }
+      if (!voiced || this.candidate < this.startMs) return;
       this.active = true;
-      this.frames = this.prefix; this.prefix = [];
-      this.duration = this.frames.reduce((n, part) => n + part.length, 0) * 1000 / this.sampleRate;
+      this.frames = this.prefix.map(part => part.frame); this.prefix = [];
+      this.duration = this.prefixMs; this.prefixMs = 0;
       this.speech = this.candidate;
       this.started();
       return;
