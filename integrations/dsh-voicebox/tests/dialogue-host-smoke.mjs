@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { VoiceContext } from '../src/voice-context.js';
+import { NarrationPlan } from '../src/content.js';
 
 const root = path.resolve(process.argv[2]);
 const require = createRequire(path.join(root, 'node_modules/@deepseek-ai/dsh-agent-loop/lib/index.js'));
@@ -70,6 +71,54 @@ try {
   await send('全部详细讲一遍');
   assert.equal(script.length, 0);
   assert.equal(voice.state(agent.session.id).waiting, true, 'a real question waits for the user');
+  const original = '# 成本\n费用为 10 元。\n# 限制\n尚未验证。';
+  const stepOf = fragment => {
+    const event = agent.session.log.filter(event => event.type === 'assistant/message'
+      && event.data.message.content.some(block => block.type === 'text' && block.text.includes(fragment))).at(-1);
+    assert(event); return `${event.data.turn}:${event.data.step}`;
+  };
+  const cost = stepOf('成本是十元'), limit = stepOf('限制是尚未验证');
+  const setupParent = () => {
+    const plan = new NarrationPlan({ turn: 1, text: original }, '全部详细讲');
+    plan.cover(['u1'], cost); plan.cover(['u2'], limit); plan.playedSteps.add(cost);
+    Object.assign(voice.state(agent.session.id), { plan, waiting: false }); return plan;
+  };
+  const update = async (key, inputPending = false) => {
+    const response = await voice.handle(new Request('http://host', { method: 'POST', body: JSON.stringify({
+      action: 'update', session_id: agent.session.id, epoch: 'owner', inputPending,
+      playback: { recent: '局部解释。', current: '', pending: 0, completedSteps: [cost, key] },
+    }) })); assert.equal(response.status, 200);
+  };
+  const parent = setupParent();
+  script.push([...text('局部解释：尚未验证意味着现在不能保证结果。'), finish]);
+  await send('第二点详细解释');
+  assert.equal(voice.state(agent.session.id).returnPlan, parent, 'the parent stays suspended while audio has no receipt');
+  const branchStep = stepOf('局部解释：尚未验证');
+  await update(branchStep, true); assert.equal(voice.state(agent.session.id).returnPlan, parent);
+  script.push(explain('u2', '接回未确认播完的限制：仍需实际验证。'), [...text('这部分已经接续。'), finish]);
+  await update(branchStep); await agent.whenIdle();
+  assert.equal(script.length, 0); assert.equal(voice.state(agent.session.id).plan, parent);
+  assert.equal(parent.covered.get('u1'), cost); assert.equal(parent.complete(), false);
+  await update(stepOf('接回未确认播完')); assert(parent.complete());
+
+  // Deliver a branch receipt inside turn-stopping while the real AgentLoop is
+  // still running. Its subsequent idle status must resume without a heartbeat.
+  const idleParent = setupParent();
+  let earlyReceipt = false, deliverEarly = true;
+  const offEarly = ctx.on('agent/turn-stopping', async ({ agent: current }) => {
+    if (current !== agent || !deliverEarly || !voice.state(agent.session.id)?.returnPlan) return;
+    deliverEarly = false;
+    assert.notEqual(agent.status, 'idle');
+    await update(stepOf('提前送达的局部解释'));
+    earlyReceipt = true;
+  });
+  script.push([...text('提前送达的局部解释：这里仍然表示尚未验证。'), finish],
+    explain('u2', '空闲后接续限制：仍需实际验证。'), [...text('接续结束。'), finish]);
+  await send('第二点详细解释');
+  for (let attempt = 0; attempt < 100 && (script.length || agent.status !== 'idle'); attempt++) await new Promise(resolve => setTimeout(resolve, 10));
+  assert(earlyReceipt); assert.equal(script.length, 0, 'idle transition must wake the pending parent exactly once');
+  assert.equal(voice.state(agent.session.id).plan, idleParent); assert.equal(idleParent.covered.get('u1'), cost);
+  offEarly();
   voice.close(agent.session.id);
   const released = await ctx.systemPrompt.assemble({ agent, scope: agent });
   assert.ok(!released.tools.some(tool => tool.name === 'voicebox_progress'));

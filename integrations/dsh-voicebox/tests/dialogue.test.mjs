@@ -159,14 +159,90 @@ test('interruption of a combined audio batch never reports its component clauses
 });
 
 function host() {
-  const tools = new Map();
+  const tools = new Map(), hooks = new Map();
   const session = { id: 's', header: {}, log: [] };
   const agent = { session, ctx: { tools: { register(tool) { tools.set(tool.name, tool); return () => tools.delete(tool.name); } } }, inject() {} };
-  const ctx = { sessions: { get: id => id === 's' ? session : undefined }, agents: { get: () => agent } };
+  const ctx = { sessions: { get: id => id === 's' ? session : undefined }, agents: { get: () => agent },
+    effect() {}, on(name, handler) { hooks.set(name, handler); } };
   const context = new VoiceContext(ctx);
   const send = (action, extra = {}) => context.handle(new Request('http://host', { method: 'POST', body: JSON.stringify({ action, session_id: 's', epoch: 'one', ...extra }) }));
-  return { context, agent, session, send, tools };
+  return { context, agent, session, send, tools, hooks };
 }
+
+test('continuing after interrupted narration preserves heard units and reopens only unfinished playback', async () => {
+  const h = host(); await h.send('start');
+  const plan = new NarrationPlan({ text: '# 一\n甲。\n# 二\n乙。' }, '全部讲');
+  plan.cover(['u1'], '2:1'); plan.cover(['u2'], '2:2'); plan.playedSteps.add('2:1');
+  h.context.state('s').plan = plan;
+  h.context.observe(h.session, { seq: 3, type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '继续讲' }] } });
+  assert.equal(h.context.state('s').plan, plan, 'resume must not rebuild the original answer');
+  assert.deepEqual(plan.pending().map(unit => unit.id), ['u2']);
+  assert.match(h.context.context(h.agent), /未确认.*播完/);
+  plan.cover(['u2'], '3:1'); plan.playedSteps.add('3:1'); assert(plan.complete());
+  plan.cover(['u1', 'u2'], '3:2'); assert(plan.complete(), 'redundant coverage must not invalidate heard units');
+  h.context.observe(h.session, { seq: 4, type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '继续讲' }] } });
+  assert.equal(h.context.state('s').plan, plan); assert.deepEqual(plan.pending(), []);
+  h.context.dispose();
+});
+
+test('a temporary answer cannot resume its parent until sealed audio drains and pending input finishes', async () => {
+  const h = host(); h.context.install(); await h.send('start');
+  const plan = new NarrationPlan({ text: '# 一\n甲。\n# 二\n乙。\n# 三\n丙。' }, '全部讲');
+  plan.cover(['u1'], '2:1'); plan.cover(['u2'], '2:2'); plan.playedSteps.add('2:1');
+  h.context.state('s').plan = plan;
+  const start = { type: 'turn/start', data: { turn: 3 } };
+  h.session.log.push(start); h.context.observe(h.session, start);
+  h.context.observe(h.session, { seq: 4, type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '第二点详细解释' }] } });
+  const branch = { type: 'assistant/message', data: { turn: 3, step: 1, message: { content: [{ type: 'text', text: '这里的意思是乙。' }] } } };
+  h.session.log.push(branch); h.context.observe(h.session, branch);
+  let injected = 0, wakes = 0;
+  h.agent.inject = () => injected++; h.agent.followup = () => wakes++; h.agent.status = 'running';
+  h.hooks.get('agent/turn-stopping')({ agent: h.agent, signal: new AbortController().signal });
+  assert.equal(injected, 0, 'model completion must not inject the parent while branch audio is queued');
+  assert.equal(h.context.state('s').returnPlan, plan);
+  const playback = { recent: '', current: '这里的意思是乙。', pending: 1, completedSteps: ['2:1'] };
+  await h.send('update', { playback }); h.agent.status = 'idle';
+  h.hooks.get('agent/status')({ agent: h.agent }); assert.equal(wakes, 0);
+  await h.send('update', { playback: { ...playback, current: '', pending: 0 } });
+  assert.equal(wakes, 0, 'an empty queue without a sealed playback receipt is insufficient');
+  await h.send('update', { inputPending: true, playback: { ...playback, current: '', pending: 0, completedSteps: ['2:1', '3:1'] } });
+  assert.equal(wakes, 0, 'capture/transcription blocks automatic parent resumption');
+  await h.send('update', { inputPending: false, playback: { ...playback, current: '', pending: 0, completedSteps: ['2:1', '3:1'] } });
+  assert.equal(wakes, 1); assert.equal(h.context.state('s').plan, plan);
+  assert.deepEqual(plan.pending().map(unit => unit.id), ['u2', 'u3']);
+  await h.send('update', { playback: { ...playback, current: '', pending: 0, completedSteps: ['3:1'] } });
+  h.hooks.get('agent/status')({ agent: h.agent }); assert.equal(wakes, 1);
+  h.context.dispose();
+});
+
+test('late receipts reconcile reopened units and an idle transition wakes a drained resume once', async () => {
+  const plan = new NarrationPlan({ text: '# 一\n甲。\n# 二\n乙。' }, '全部讲');
+  plan.cover(['u1'], '2:1'); plan.resumeUnheard();
+  assert.deepEqual(plan.pending().map(unit => unit.id), ['u1', 'u2']);
+  plan.playedSteps.add('2:1'); assert.deepEqual(plan.pending().map(unit => unit.id), ['u2']);
+  const h = host(); h.context.install(); await h.send('start'); h.context.state('s').plan = plan;
+  let wakes = 0; h.agent.status = 'running'; h.agent.followup = () => wakes++;
+  await h.send('update', { paused: true, playback: { recent: '', current: '', pending: 0, completedSteps: ['2:1'] } });
+  await h.send('update', { paused: false }); assert.equal(wakes, 0);
+  h.agent.status = 'idle'; h.hooks.get('agent/status')({ agent: h.agent }); assert.equal(wakes, 1);
+  h.hooks.get('agent/status')({ agent: h.agent }); assert.equal(wakes, 1);
+  assert.equal((await h.send('update', { inputPending: 'yes' })).status, 400);
+  h.context.dispose();
+});
+
+test('waiting, pausing, stopping and a replacement question block late branch receipts', async () => {
+  for (const action of ['waiting', 'paused', 'stopped', 'replacement']) {
+    const h = host(); h.context.install(); await h.send('start');
+    const plan = new NarrationPlan({ text: '# 一\n甲。\n# 二\n乙。' }, '全部讲');
+    const state = h.context.state('s'); Object.assign(state, { returnPlan: plan, returnPending: true, returnSteps: new Set(['3:1']) });
+    let wakes = 0; h.agent.status = 'idle'; h.agent.followup = () => wakes++;
+    if (action === 'waiting') state.waiting = true;
+    if (action === 'replacement') h.context.observe(h.session, { seq: 5, type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '换个话题，讨论天气' }] } });
+    await h.send('update', { paused: action === 'paused', stopped: action === 'stopped', playback: { recent: '', current: '', pending: 0, completedSteps: ['3:1'] } });
+    h.hooks.get('agent/status')({ agent: h.agent }); assert.equal(wakes, 0, action);
+    h.context.dispose();
+  }
+});
 
 test('voice leases isolate sessions, reject stale updates and remove scoped tools on end', async () => {
   const h = host();
@@ -195,10 +271,10 @@ test('detail plan uses original visible text, stops non-progress and preserves u
   assert.equal(plan.complete(), false); h.context.dispose();
 });
 
-test('explicit continuation retains explained sections instead of restarting from the beginning', async () => {
+test('explicit continuation retains fully played sections instead of restarting from the beginning', async () => {
   const h = host(); await h.send('start');
   const plan = new NarrationPlan({ text: '# 一\n甲。\n# 二\n乙。' }, '全部讲');
-  plan.cover(['u1'], '2:1'); plan.stalled = 2; plan.rounds = 8;
+  plan.cover(['u1'], '2:1'); plan.playedSteps.add('2:1'); plan.stalled = 2; plan.rounds = 8;
   h.context.state('s').plan = plan;
   h.context.observe(h.session, { seq: 3, type: 'user/message', data: { source: {kind:'user'}, content: [{type:'text',text:'继续讲'}] } });
   assert.equal(h.context.state('s').plan, plan);

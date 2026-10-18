@@ -39,7 +39,7 @@ test('endpointing ignores clicks, retains speech across short pauses and bounds 
 });
 
 function harness({ allowInterrupt = false, listen, capture } = {}) {
-  const submissions = [], cancels = [], calls = [], closed = [], modes = [], holds = [];
+  const submissions = [], cancels = [], calls = [], closed = [], modes = [], holds = [], contexts = [];
   let feed;
   const session = Object.assign(store({ subagent: null, pendingSubmissions: [], running: false }), {
     beginSubmission(input) { submissions.push(input); return { requestId: 'rpc-voice', abandon() { submissions.push('abandoned'); } }; },
@@ -69,13 +69,31 @@ function harness({ allowInterrupt = false, listen, capture } = {}) {
   };
   const form = store({ value: { ...VOICE_DEFAULTS, allowInterrupt } });
   const service = new VoiceConversation(speaker, form, async (url, init) => {
-    if (url.endsWith('/conversation')) return Response.json({ ok: true });
+    if (url.endsWith('/conversation')) { contexts.push(JSON.parse(init.body)); return Response.json({ ok: true }); }
     if (url.endsWith('/status')) return Response.json({ ready: true });
     assert.equal(JSON.parse(init.body).session_id, 's');
     return listen ? listen(init) : Response.json({ text: '请解释这段代码。' });
   }, capture || (async options => { feed = options.frame; return { echoCancellation: true, close: () => closed.push(true), setMuted() {} }; }));
-  return { service, session, speaker, form, submissions, cancels, calls, closed, modes, holds, feed: (...args) => feed(...args) };
+  return { service, session, speaker, form, submissions, cancels, calls, closed, modes, holds, contexts, feed: (...args) => feed(...args) };
 }
+
+test('recording, delayed recognition and official submission report pending input until the turn is accepted', async t => {
+  let recognize, accept;
+  const h = harness({ listen: () => new Promise(resolve => { recognize = resolve; }) });
+  t.after(() => { recognize?.(Response.json({ text: '' })); accept?.(); h.service.dispose(); });
+  const original = h.session.prompt;
+  h.session.prompt = async (...args) => { await original(...args); await new Promise(resolve => { accept = resolve; }); return { ok: true }; };
+  await h.service.start(); await tick(); h.service.coolUntil = 0;
+  assert.equal(h.contexts.at(-1).inputPending, false);
+  for (let n = 0; n < 25; n++) h.feed(pcm(), 16000);
+  await tick(); assert.equal(h.service.state.phase, 'capturing'); assert.equal(h.contexts.at(-1).inputPending, true);
+  h.service.finishInput(); await tick(); assert.equal(h.service.state.phase, 'transcribing');
+  assert.equal(h.contexts.at(-1).inputPending, true);
+  recognize(Response.json({ text: '第二点详细解释。' })); await tick(); await tick();
+  assert.equal(h.calls.length, 1); assert.equal(h.service.state.phase, 'sending'); assert.equal(h.contexts.at(-1).inputPending, true);
+  accept(); await tick(); await tick();
+  assert.equal(h.contexts.at(-1).inputPending, false); assert.equal(h.calls.length, 1);
+});
 
 test('normal hesitation stays in one recording and explicit finish submits once', async () => {
   const h = harness(); await h.service.start(); h.service.coolUntil = 0;

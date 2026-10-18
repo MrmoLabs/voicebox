@@ -35,7 +35,7 @@ export class VoiceContext {
     }, 'voicebox: expire disconnected voice clients');
     this.ctx.effect(() => this.ctx.systemPrompt.context({ name: 'voicebox:conversation', order: 700,
       text: context => this.context(context.agent), interpolate: false }), 'voicebox: session voice context');
-    this.ctx.on('agent/status', ({ agent }) => this.attachTool(agent));
+    this.ctx.on('agent/status', ({ agent }) => { this.attachTool(agent); this.maybeResume(agent); });
     this.ctx.on('session/event', (session, event) => this.observe(session, event));
     this.ctx.on('system-prompt/assemble', async (_assembly, context, next) => {
       const assembly = await next();
@@ -51,13 +51,26 @@ export class VoiceContext {
         agent.inject(notice('本轮回复只有代码、表格等工件，尚未提供可理解的口头解释。请直接补充其用途、关键内容、结果和限制，不重贴原工件，不要求用户看屏幕。'));
         return;
       }
-      if (state?.returnPlan && !state.paused && !signal.aborted) {
-        state.plan = state.returnPlan; state.returnPlan = undefined;
-        state.intent = { ...state.intent, temporary: false };
+      if (state?.returnPlan && !signal.aborted) {
+        state.returnPending = true;
+        return;
       }
       if (!state?.plan || state.paused || signal.aborted || !state.plan.advance()) return;
-      agent.inject(notice(`继续用户已要求的详细讲解，只补充当前计划未解释的单元 ${state.plan.pending().map(unit => unit.id).join('、')}。不要重讲已经说明的内容。已解释的单元用 voicebox_progress 登记。`));
+      agent.inject(notice(`继续用户已要求的详细讲解，补充未解释或未确认播完的单元 ${state.plan.pending().map(unit => unit.id).join('、')}。不要重讲已经完整播放的内容。已解释的单元用 voicebox_progress 登记。`));
     });
+  }
+  maybeResume(agent) {
+    const state = this.state(agent?.session?.id);
+    if (!state || state.paused || state.waiting || state.inputPending || state.playback?.pending !== 0 || agent.status !== 'idle'
+      || this.ctx.agents.get(agent.session.id) !== agent) return;
+    if (state.returnPending && state.returnPlan) {
+      if (!state.returnSteps?.size || [...state.returnSteps].some(key => !state.returnPlan.playedSteps.has(key))) return;
+      state.plan = state.returnPlan; state.returnPlan = undefined; state.returnPending = false; state.returnSteps = undefined;
+      state.intent = { ...state.intent, temporary: false }; state.resumePending = true;
+    }
+    if (!state.resumePending || !state.plan) return;
+    state.resumePending = false;
+    if (state.plan.advance()) agent.followup(notice('恢复用户已请求的详细讲解，接续未解释或未确认播完的单元，不重复已完整播放部分。'));
   }
   attachTool(agent) {
     const state = this.state(agent?.session?.id);
@@ -85,18 +98,22 @@ export class VoiceContext {
       const text = (event.data.message.content || []).filter(block => block.type === 'text').map(block => block.text).join('\n').trim();
       state.waiting = /[？?]\s*$|(?:吗|呢)[。！]?\s*$/u.test(text) && !/(?:要不要继续|是否继续|继续吗)/u.test(text);
       if (text) state.artifactGap = !spokenText(text.replace(/^\s{0,3}#{1,6}\s+.*$/gm, '')).trim();
+      if (state.returnPlan && text && !state.artifactGap) state.returnSteps?.add(`${event.data.turn}:${event.data.step ?? 0}`);
     }
     if (event.type === 'user/message' && event.data.source?.kind === 'user') {
       const text = (event.data.content || []).filter(block => block.type === 'text').map(block => block.text).join('\n');
       const intent = voiceIntent(text);
-      const continuing = intent.continuation && state.plan?.pending().length;
+      const parent = state.plan || state.returnPlan;
+      const continuing = intent.continuation && parent;
       const previous = intent.expandPrevious && state.plan ? state.plan.answer : this.answer(session, event.seq);
-      state.returnPlan = intent.temporary ? state.plan : undefined;
-      state.plan = continuing ? state.plan : intent.expandPrevious && intent.scope === 'answer' && previous?.text ? new NarrationPlan(previous, text) : undefined;
-      if (continuing) { state.plan.rounds = 0; state.plan.stalled = 0; state.plan.lastMissing = undefined; }
+      state.returnPlan = intent.temporary ? parent : undefined;
+      state.returnPlan?.resumeUnheard();
+      state.returnSteps = state.returnPlan ? new Set() : undefined; state.returnPending = false;
+      state.plan = continuing ? parent : intent.expandPrevious && intent.scope === 'answer' && previous?.text ? new NarrationPlan(previous, text) : undefined;
+      if (continuing) { state.plan.resumeUnheard(); state.plan.rounds = 0; state.plan.stalled = 0; state.plan.lastMissing = undefined; }
       state.intent = intent; state.paused = false; state.resumePending = false;
       state.waiting = false;
-      state.artifactRetries = 0;
+      state.artifactRetries = 0; state.artifactGap = false;
       state.explanationTurn = session.log.filter(entry => entry.type === 'turn/start').at(-1)?.data.turn;
     }
   }
@@ -119,7 +136,9 @@ export class VoiceContext {
       : '本次是局部追问。先解释目标，再自然接回原答复未讲内容；需要用户回答时先等待。');
     if (plan) {
       parts.push(`用户要求详细展开上一答复。当前源答复范围：${plan.units.map(unit => `${unit.id} ${unit.title}`).join('；')}。这不是新任务或新的用户发言。`);
-      for (const unit of plan.pending().slice(0, 6)) parts.push(`待解释 ${unit.id} ${unit.title}：\n${unit.text.slice(0, 16000)}${unit.text.length > 16000 ? '\n[本单元原文较长，此处为节选；完整原文在会话记录中，不可声称已完整提供。]' : ''}`);
+      if (plan.pending().some(unit => plan.reopened.has(unit.id))) parts.push('部分单元此前已经写出解释，但未确认完整播完。参考实际播放位置接续，必要时简短回顾；不能声称用户完整听过，也不要重头重复整篇。');
+      if (plan.complete() && state.intent?.continuation) parts.push('原详细计划已完整播放。根据用户当前的继续请求推进相关内容，不要重头重复原计划；没有后续材料时如实说明。');
+      for (const unit of plan.pending().slice(0, 6)) parts.push(`${plan.reopened.has(unit.id) ? '未确认播完' : '待解释'} ${unit.id} ${unit.title}：\n${unit.text.slice(0, 16000)}${unit.text.length > 16000 ? '\n[本单元原文较长，此处为节选；完整原文在会话记录中，不可声称已完整提供。]' : ''}`);
       parts.push('按这些单元连续详细解释，每完成一个或几个章节调用 voicebox_progress(covered=[对应ID])，仅登记已在可见正文解释的内容；不要先调用工具再省去解释。未列出的剩余单元将在下一步提供。');
       if (plan.stalled >= 2 || plan.rounds >= 8) parts.push('自动补充已达到无进展或轮次保护，计划仍未完整，不得宣称全部讲完。');
     }
@@ -132,6 +151,7 @@ export class VoiceContext {
       if (raw.length > 16000) return json({ error: '语音状态过大' }, 413);
       const body = JSON.parse(raw);
       if (!body || typeof body.session_id !== 'string' || body.session_id.length > 200 || typeof body.epoch !== 'string' || !body.epoch || body.epoch.length > 100 || !['start', 'update', 'end'].includes(body.action)) return json({ error: '无效的语音会话状态' }, 400);
+      if (body.inputPending !== undefined && typeof body.inputPending !== 'boolean') return json({ error: '无效的语音录入状态' }, 400);
       const session = this.ctx.sessions.get(body.session_id);
       if (!session || session.header.origin === 'subagent') return json({ error: '会话不可用于语音对话' }, 404);
       if (body.action === 'end') { this.close(session.id, body.epoch); return json({ ok: true }); }
@@ -151,18 +171,16 @@ export class VoiceContext {
       if (body.playback) {
         const p = body.playback;
         state.playback = p;
-        if (state.plan) for (const key of p.completedSteps) state.plan.playedSteps.add(key);
+        for (const plan of new Set([state.plan, state.returnPlan])) if (plan) for (const key of p.completedSteps) plan.playedSteps.add(key);
       }
-      if (body.stopped === true) { state.plan = undefined; state.returnPlan = undefined; state.resumePending = false; }
+      if (body.stopped === true) { state.plan = undefined; state.returnPlan = undefined; state.resumePending = false; state.returnPending = false; state.returnSteps = undefined; }
       const resume = state.paused && body.paused !== true;
       state.paused = body.paused === true;
+      state.inputPending = body.inputPending === true;
       this.attachTool(this.ctx.agents.get(session.id));
       const agent = this.ctx.agents.get(session.id);
       if (resume && state.plan?.pending().length) state.resumePending = true;
-      if (state.resumePending && !state.paused && !state.waiting && state.playback?.pending === 0 && agent?.status === 'idle' && state.plan?.advance()) {
-        state.resumePending = false;
-        agent.followup(notice('恢复用户已请求的详细讲解，继续未解释单元，不重复已完成部分。'));
-      }
+      this.maybeResume(agent);
       return json({ ok: true, plan: state.plan ? { total: state.plan.units.length, remaining: state.plan.pending().length, completed: state.plan.complete(),
         limited: state.plan.pending().length > 0 && (state.plan.stalled >= 2 || state.plan.rounds >= 8) } : null });
     } catch (error) { return json({ error: error.message || String(error) }, 400); }

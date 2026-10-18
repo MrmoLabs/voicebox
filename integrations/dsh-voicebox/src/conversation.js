@@ -32,9 +32,12 @@ export class VoiceConversation {
   }
   getSnapshot = () => this.state;
   subscribe = fn => { this.listeners.add(fn); return () => this.listeners.delete(fn); };
+  inputPending() { return ['starting', 'capturing', 'transcribing', 'sending'].includes(this.state.phase); }
   update(value) {
+    const pending = this.inputPending();
     if (value.phase && value.phase !== this.state.phase) this.speaker.trace?.('input.state', { state: value.phase });
     this.state = { ...this.state, ...value }; for (const fn of this.listeners) fn();
+    if (this.contextEpoch && this.state.active && pending !== this.inputPending()) void this.syncContext().catch(error => this.update({ notice: error.message }));
   }
   settings() { return { ...VOICE_DEFAULTS, ...this.form?.getSnapshot().value }; }
   backgroundBlocked() { return !this.settings().backgroundListening && !!(globalThis.document?.hidden || globalThis.document?.hasFocus?.() === false); }
@@ -60,7 +63,7 @@ export class VoiceConversation {
       if (action !== 'end' && (this.contextEpoch !== epoch || !this.state.active)) return;
       const response = await this.fetcher('http://voicebox.invalid/conversation', {
         method: 'POST', headers: { 'content-type': 'application/json' }, signal: AbortSignal.timeout(5000),
-        body: JSON.stringify({ action, session_id: id, epoch, playback, paused: this.speaker.userPaused === true, stopped: this.contextStopped === true }),
+        body: JSON.stringify({ action, session_id: id, epoch, playback, paused: this.speaker.userPaused === true, stopped: this.contextStopped === true, inputPending: this.inputPending() }),
       });
       const data = await response.json();
       if (!response.ok || data.ok !== true) throw new Error(data.error || '无法同步会话语音上下文，请更新 DSH 插件');

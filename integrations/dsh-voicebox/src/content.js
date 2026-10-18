@@ -50,13 +50,19 @@ export class NarrationPlan {
   constructor(answer, request) {
     this.answer = answer; this.request = request;
     this.units = answerUnits(answer.text);
-    this.covered = new Map(); this.playedSteps = new Set();
+    this.covered = new Map(); this.playedSteps = new Set(); this.reopened = new Set();
     this.rounds = 0; this.lastMissing = undefined; this.stalled = 0;
   }
-  pending() { return this.units.filter(unit => !this.covered.has(unit.id)); }
+  pending() { return this.units.filter(unit => !this.covered.has(unit.id) || (this.reopened.has(unit.id) && !this.playedSteps.has(this.covered.get(unit.id)))); }
+  resumeUnheard() {
+    for (const [id, step] of this.covered) if (!this.playedSteps.has(step)) this.reopened.add(id);
+  }
   cover(ids, step) {
     if (!Array.isArray(ids) || ids.length > 200 || ids.some(id => !this.units.some(unit => unit.id === id))) throw new Error('未知的讲解单元');
-    for (const id of ids) this.covered.set(id, step);
+    for (const id of ids) {
+      if (this.playedSteps.has(this.covered.get(id))) continue;
+      if (!this.covered.has(id) || this.reopened.has(id)) { this.covered.set(id, step); this.reopened.delete(id); }
+    }
   }
   complete() { return this.units.length > 0 && !this.pending().length && [...this.covered.values()].every(step => this.playedSteps.has(step)); }
   advance() {
