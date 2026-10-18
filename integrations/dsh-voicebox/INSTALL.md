@@ -59,3 +59,13 @@ bun run verify:dsh
 它在仓库 `.tmp-dsh-package-*` 目录建立独立 `DSH_HOME`，通过官方 CLI / pnpm 安装、升级与回退；每一步核对配置组合与已安装宿主 / 客户端文件的 SHA-256，确认与实际安装包一致，并使用该已安装版本的真实 Cordis / Connection / SessionStore 测试打包插件。使用随附的 Web profile 模板，不启动或退出正在使用的 Desktop，不复用用户凭据与会话；因此仍不能代替原生窗口首次安装验收。结果保存在 `dsh-install-verification.json`。
 
 同一脚本还使用当前源码的 VoiceContext，在已安装的真实 AgentLoop 中执行脚本模型续讲验收；不调用远程模型，不把“已解释”当成“已听完”。原生 Desktop 的全新 profile 仍需要用户完成它自己的首次认证引导，插件不会复制其他 profile 的凭据。
+
+### 可选：真实本地模型循环验证
+
+确认 Voicebox 空闲、已加载 Qwen，且已缓存 Whisper turbo 后运行：
+
+```powershell
+bun tests/local-roundtrip-smoke.mjs --run ../../release/self-check/local-roundtrip 10
+```
+
+它复用当前 Qwen 规格、已有 DSH 默认声音绑定，以一条合成短句重复验证真实识别、唯一提交、生产分句队列和静默 PCM 调度。回复 / 会话上下文为脚本，不访问真实麦克风或扬声器，不调用远程 LLM，不下载模型、不写用户配置。测试历史和合成音频均保留；结果与 WAV 写入指定目录。它不能代替真实设备、音质和自然追问验收。
