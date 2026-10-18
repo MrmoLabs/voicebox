@@ -67,7 +67,7 @@ export class VoiceConversation {
       });
       const data = await response.json();
       if (!response.ok || data.ok !== true) throw new Error(data.error || '无法同步会话语音上下文，请更新 DSH 插件');
-      if (this.contextEpoch === epoch && this.state.active) this.update({ plan: data.plan });
+      if (this.contextEpoch === epoch && this.state.active) this.update({ plan: data.plan, awaitingAnswer: data.awaitingAnswer === true });
     };
     this.contextFlight = (this.contextFlight || Promise.resolve()).catch(() => {}).then(send);
     return this.contextFlight;
@@ -112,7 +112,7 @@ export class VoiceConversation {
     if (allowed?.length && !allowed.includes(id)) { this.update({ error: '当前会话不在 Voicebox 白名单中' }); return; }
     const abort = new AbortController(); this.abort = abort; this.session = session; this.id = id;
     this.speaker.trace?.('call.start'); this.lastVisibility = undefined;
-    this.update({ active: true, phase: 'starting', transcript: '', error: '', notice: '', confirming: false, muted: false, heard: undefined });
+    this.update({ active: true, phase: 'starting', transcript: '', error: '', notice: '', confirming: false, muted: false, heard: undefined, awaitingAnswer: false });
     // Resume playback directly from this user gesture before awaiting network I/O.
     const unlock = this.speaker.unlock();
     try {
@@ -220,6 +220,11 @@ export class VoiceConversation {
       if (typeof data.text !== 'string' || data.text.length > 10000) throw new Error('语音识别返回了无效文字');
       const text = data.text.trim();
       this.speaker.trace?.('input.asr-ready', { input: operation, durationMs: diagnosticNow() - started });
+      // Reuse the state sync already sent when capture began; its semantic wait
+      // signal prevents a short answer from being discarded as a backchannel.
+      await this.contextFlight;
+      signal.throwIfAborted();
+      if (this.input !== input) return;
       if (input.candidate && !input.candidate.hold.isCurrent()) {
         this.releaseCandidate(); this.update({ phase: 'listening', notice: '回答已变更，本段插话未发送', confirming: false }); this.refresh(); return;
       }
@@ -231,7 +236,8 @@ export class VoiceConversation {
       }
       const playback = this.speaker.delivery?.snapshot();
       const reference = playback?.current || playback?.recent || this.speaker.state.playbackText || '';
-      const intent = voiceIntent(text, { busy: this.busy(), paused: this.speaker.userPaused === true, awaitingAnswer: /[？?]\s*$|(?:吗|呢)[。！]?\s*$/u.test(reference) });
+      const intent = voiceIntent(text, { busy: this.busy(), paused: this.speaker.userPaused === true,
+        awaitingAnswer: this.state.awaitingAnswer === true || /[？?]\s*$|(?:吗|呢)[。！]?\s*$/u.test(reference) });
       this.speaker.trace?.('input.intent', { input: operation, state: intent.kind });
       if (intent.kind !== 'question' && (intent.kind !== 'resume' || this.speaker.userPaused)) {
         this.releaseCandidate();

@@ -38,7 +38,7 @@ test('endpointing ignores clicks, retains speech across short pauses and bounds 
   assert.equal(view.getInt16(44, true), Math.trunc(.2 * 32767));
 });
 
-function harness({ allowInterrupt = false, listen, capture } = {}) {
+function harness({ allowInterrupt = false, listen, capture, context } = {}) {
   const submissions = [], cancels = [], calls = [], closed = [], modes = [], holds = [], contexts = [];
   let feed;
   const session = Object.assign(store({ subagent: null, pendingSubmissions: [], running: false }), {
@@ -69,7 +69,7 @@ function harness({ allowInterrupt = false, listen, capture } = {}) {
   };
   const form = store({ value: { ...VOICE_DEFAULTS, allowInterrupt } });
   const service = new VoiceConversation(speaker, form, async (url, init) => {
-    if (url.endsWith('/conversation')) { contexts.push(JSON.parse(init.body)); return Response.json({ ok: true }); }
+    if (url.endsWith('/conversation')) { contexts.push(JSON.parse(init.body)); return context ? context(contexts.at(-1)) : Response.json({ ok: true }); }
     if (url.endsWith('/status')) return Response.json({ ready: true });
     assert.equal(JSON.parse(init.body).session_id, 's');
     return listen ? listen(init) : Response.json({ text: '请解释这段代码。' });
@@ -125,6 +125,25 @@ test('spoken backchannels and pause/resume preserve the answer without new model
   text = '嗯，不对'; utterance(h.feed); await tick();
   assert.equal(h.calls.length, 1); assert.equal(h.cancels.length, 1, 'a real correction still interrupts');
   h.service.dispose();
+});
+
+test('a semantic wait from the host preserves a short answer while branch audio is still playing', async t => {
+  let release, pending = false, awaitingAnswer = false;
+  const h = harness({ allowInterrupt: true, listen: () => Response.json({ text: '好' }), context: body => {
+    if (body.inputPending && pending) return new Promise(resolve => { release = () => { awaitingAnswer = true; resolve(Response.json({ ok: true, awaitingAnswer })); }; });
+    return Response.json({ ok: true, awaitingAnswer });
+  } });
+  t.after(() => { release?.(); h.service.dispose(); });
+  await h.service.start(); h.service.coolUntil = 0;
+  h.speaker.state = { phase: 'playing', playbackText: '请确认你希望我先举例。' };
+  pending = true; utterance(h.feed); await tick();
+  assert.equal(h.calls.length, 0, 'recognition waits for its existing capture state sync');
+  assert.equal(h.service.state.phase, 'transcribing');
+  pending = false; release(); await tick(); await tick();
+  assert.equal(h.calls.length, 1, 'the answer is submitted, not filtered as an acknowledgement');
+  assert.equal(h.calls[0].content[0].text, '好');
+  assert.equal(h.calls[0].mode, 'queue');
+  assert.equal(h.cancels.length, 0, 'completed model output does not need cancellation');
 });
 
 test('hands-free speech uses official submission identity and supports repeated turns without persisting autoplay', async () => {

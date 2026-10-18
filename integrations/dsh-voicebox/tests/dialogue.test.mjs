@@ -230,6 +230,62 @@ test('late receipts reconcile reopened units and an idle transition wakes a drai
   h.context.dispose();
 });
 
+test('a multi-turn local question retains its parent but requires an explicit branch decision', async () => {
+  const h = host(); h.context.install(); await h.send('start');
+  const plan = new NarrationPlan({ text: '# 一\n甲。\n# 二\n乙。' }, '全部讲');
+  plan.cover(['u1'], '2:1'); plan.playedSteps.add('2:1');
+  const state = h.context.state('s'); state.plan = plan;
+  const user = (text, turn) => {
+    const event = { type: 'turn/start', data: { turn } };
+    h.session.log.push(event); h.context.observe(h.session, event);
+    h.context.observe(h.session, { type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text }] } });
+  };
+  const answer = (text, turn) => {
+    const event = { type: 'assistant/message', data: { turn, step: 1, message: { content: [{ type: 'text', text }] } } };
+    h.session.log.push(event); h.context.observe(h.session, event);
+    h.hooks.get('agent/turn-stopping')({ agent: h.agent, signal: new AbortController().signal });
+  };
+  let wakes = 0; h.agent.status = 'idle'; h.agent.followup = () => wakes++;
+  user('第二点详细解释', 3); answer('你想了解定义还是例子？', 3);
+  user('先举一个例子', 4);
+  assert.equal(state.returnPlan, plan, 'answering a branch question must preserve the original plan');
+  answer('例子是这样。', 4);
+  const playback = { recent: '', current: '', pending: 0, completedSteps: ['4:1'] };
+  await h.send('update', { playback }); assert.equal(wakes, 0, 'a new message may change topics; audio alone cannot decide');
+  const tool = h.tools.get('voicebox_branch'); assert.ok(tool);
+  await tool.execute({ action: 'resume' }, { agent: h.agent });
+  h.hooks.get('agent/turn-stopping')({ agent: h.agent, signal: new AbortController().signal });
+  h.hooks.get('agent/status')({ agent: h.agent });
+  assert.equal(wakes, 1); assert.equal(state.plan, plan);
+  assert.deepEqual(plan.pending().map(unit => unit.id), ['u2']);
+  h.hooks.get('agent/status')({ agent: h.agent }); assert.equal(wakes, 1);
+  h.context.dispose(); assert.equal(h.tools.size, 0);
+});
+
+test('branch wait and abandon are scoped and cannot be overridden by later playback receipts', async () => {
+  for (const action of ['wait', 'abandon']) {
+    const h = host(); h.context.install(); await h.send('start');
+    const state = h.context.state('s');
+    state.returnPlan = new NarrationPlan({ text: '# 一\n甲。' }, '全部讲');
+    state.returnSteps = new Set(['3:1']); state.returnPending = true;
+    let wakes = 0; h.agent.status = 'idle'; h.agent.followup = () => wakes++;
+    const tool = h.tools.get('voicebox_branch'); assert.ok(tool);
+    await assert.rejects(tool.execute({ action }, { agent: {} }), /对应/);
+    await assert.rejects(tool.execute({ action: 'invented' }, { agent: h.agent }), /无效/);
+    await assert.rejects(tool.execute({ action }, { agent: h.agent }), /可见/);
+    h.context.observe(h.session, { type: 'turn/start', data: { turn: 3 } });
+    const event = { type: 'assistant/message', data: { turn: 3, step: 1, message: { content: [{ type: 'text', text: '请先描述你的需求。' }] } } };
+    h.session.log.push(event); h.context.observe(h.session, event);
+    await tool.execute({ action }, { agent: h.agent });
+    const response = await h.send('update', { playback: { recent: '', current: '', pending: 0, completedSteps: ['3:1'] } });
+    assert.equal((await response.json()).awaitingAnswer, action === 'wait');
+    h.hooks.get('agent/status')({ agent: h.agent }); assert.equal(wakes, 0);
+    if (action === 'wait') { assert.equal(state.waiting, true); assert.ok(state.returnPlan); }
+    else assert.equal(state.returnPlan, undefined);
+    h.context.close('s'); await assert.rejects(tool.execute({ action }, { agent: h.agent }), /对应/);
+  }
+});
+
 test('waiting, pausing, stopping and a replacement question block late branch receipts', async () => {
   for (const action of ['waiting', 'paused', 'stopped', 'replacement']) {
     const h = host(); h.context.install(); await h.send('start');

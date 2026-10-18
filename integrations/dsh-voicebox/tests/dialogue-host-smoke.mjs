@@ -17,6 +17,10 @@ const explain = (id, value) => [...text(value), { type: 'block-start', index: 1,
   { type: 'tool-call-delta', index: 1, id: `call-${id}`, name: 'voicebox_progress', argumentsDelta: JSON.stringify({ covered: [id] }) },
   { type: 'block-end', index: 1, block: { type: 'tool-call', id: `call-${id}`, name: 'voicebox_progress', arguments: JSON.stringify({ covered: [id] }) } },
   { type: 'finish', reason: { kind: 'tool-calls' } }];
+const branch = (action, value) => [...text(value), { type: 'block-start', index: 1, blockType: 'tool-call' },
+  { type: 'tool-call-delta', index: 1, id: `branch-${action}`, name: 'voicebox_branch', argumentsDelta: JSON.stringify({ action }) },
+  { type: 'block-end', index: 1, block: { type: 'tool-call', id: `branch-${action}`, name: 'voicebox_branch', arguments: JSON.stringify({ action }) } },
+  { type: 'finish', reason: { kind: 'tool-calls' } }];
 const script = [[...text('# 成本\n费用为 10 元。\n# 限制\n尚未验证。'), finish],
   [...text('先按两个部分展开。'), finish], explain('u1', '成本是十元，具体包含这些部分。'), explain('u2', '限制是尚未验证，不能当成已经成功。'), [...text('这两部分已经解释。'), finish]];
 const requests = [];
@@ -56,6 +60,7 @@ try {
   assert.ok(agent.session.log.some(event => event.type === 'tool/result' && !event.data.error));
   const scoped = await ctx.systemPrompt.assemble({ agent, scope: agent });
   assert.ok(scoped.tools.some(tool => tool.name === 'voicebox_progress'));
+  assert.ok(!scoped.tools.some(tool => tool.name === 'voicebox_branch'), 'ordinary voice turns do not expose a branch control');
   const paused = voice.state(agent.session.id);
   paused.plan.covered.delete('u2'); paused.paused = true;
   script.push(explain('u2', '接续尚未解释的限制：这一点仍然没有验证。'), [...text('限制已经说明。'), finish]);
@@ -86,7 +91,7 @@ try {
   const update = async (key, inputPending = false) => {
     const response = await voice.handle(new Request('http://host', { method: 'POST', body: JSON.stringify({
       action: 'update', session_id: agent.session.id, epoch: 'owner', inputPending,
-      playback: { recent: '局部解释。', current: '', pending: 0, completedSteps: [cost, key] },
+      playback: { recent: '局部解释。', current: '', pending: 0, completedSteps: [cost, ...[key].flat()] },
     }) })); assert.equal(response.status, 200);
   };
   const parent = setupParent();
@@ -119,9 +124,33 @@ try {
   assert(earlyReceipt); assert.equal(script.length, 0, 'idle transition must wake the pending parent exactly once');
   assert.equal(voice.state(agent.session.id).plan, idleParent); assert.equal(idleParent.covered.get('u1'), cost);
   offEarly();
+
+  const multiParent = setupParent();
+  script.push(branch('wait', '请先说明你想了解定义还是例子。'), [...text('我先等你说明需求。'), finish]);
+  await send('第二点详细解释');
+  assert.equal(voice.state(agent.session.id).waiting, true, 'explicit wait survives a punctuation-free final answer');
+  const inBranch = await ctx.systemPrompt.assemble({ agent, scope: agent });
+  assert.ok(inBranch.tools.some(tool => tool.name === 'voicebox_branch'));
+  script.push(branch('resume', '例子说明如下：这个结果还需要实际测试。'), [...text('局部讨论说明结束。'), finish]);
+  await send('先举一个例子');
+  assert.equal(voice.state(agent.session.id).returnPlan, multiParent);
+  const decisionStep = stepOf('例子说明如下'), lastStep = stepOf('局部讨论说明结束');
+  await update(decisionStep); assert.equal(voice.state(agent.session.id).returnPlan, multiParent, 'one of two spoken branch steps is insufficient');
+  script.push(explain('u2', '多轮追问后接续原限制：还没有验证。'), [...text('原讲解已接回。'), finish]);
+  await update([decisionStep, lastStep]); await agent.whenIdle();
+  assert.equal(script.length, 0); assert.equal(voice.state(agent.session.id).plan, multiParent);
+  assert.equal(multiParent.covered.get('u1'), cost);
+
+  setupParent();
+  script.push([...text('需要哪一种例子？'), finish]); await send('第二点详细解释');
+  script.push(branch('abandon', '现在换成新问题，先讨论你的新需求。'), [...text('旧讲解不再继续。'), finish]);
+  await send('换个话题，介绍另一个项目');
+  assert.equal(voice.state(agent.session.id).returnPlan, undefined);
+  await update(stepOf('旧讲解不再继续')); assert.equal(script.length, 0);
+  assert.ok(!agent.session.log.some(event => event.type === 'tool/result' && event.data.error), 'all scoped progress and branch tools must execute successfully');
   voice.close(agent.session.id);
   const released = await ctx.systemPrompt.assemble({ agent, scope: agent });
-  assert.ok(!released.tools.some(tool => tool.name === 'voicebox_progress'));
+  assert.ok(!released.tools.some(tool => ['voicebox_progress', 'voicebox_branch'].includes(tool.name)));
   console.log(`PASS: installed AgentLoop, scoped voice tool, ${requests.length} scripted model calls, durable plugin continuation, no false playback completion, clean release`);
 } finally {
   await voiceFiber?.dispose();

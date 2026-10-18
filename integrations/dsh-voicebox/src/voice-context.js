@@ -39,8 +39,9 @@ export class VoiceContext {
     this.ctx.on('session/event', (session, event) => this.observe(session, event));
     this.ctx.on('system-prompt/assemble', async (_assembly, context, next) => {
       const assembly = await next();
-      if (this.state(context.agent?.session?.id) && context.agent.session.header.origin !== 'subagent') return assembly;
-      return { ...assembly, tools: assembly.tools.filter(tool => tool.name !== 'voicebox_progress') };
+      const state = context.agent?.session?.header.origin !== 'subagent' && this.state(context.agent?.session?.id);
+      return { ...assembly, tools: assembly.tools.filter(tool => tool.name === 'voicebox_progress' ? !!state
+        : tool.name === 'voicebox_branch' ? !!state?.returnPlan : true) };
     });
     this.ctx.on('agent/turn-stopping', ({ agent, signal }) => {
       const state = this.state(agent.session.id);
@@ -64,8 +65,10 @@ export class VoiceContext {
     if (!state || state.paused || state.waiting || state.inputPending || state.playback?.pending !== 0 || agent.status !== 'idle'
       || this.ctx.agents.get(agent.session.id) !== agent) return;
     if (state.returnPending && state.returnPlan) {
+      if (state.returnDecision && !['auto', 'resume'].includes(state.returnDecision)) return;
       if (!state.returnSteps?.size || [...state.returnSteps].some(key => !state.returnPlan.playedSteps.has(key))) return;
       state.plan = state.returnPlan; state.returnPlan = undefined; state.returnPending = false; state.returnSteps = undefined;
+      state.returnDecision = undefined;
       state.intent = { ...state.intent, temporary: false }; state.resumePending = true;
     }
     if (!state.resumePending || !state.plan) return;
@@ -76,7 +79,7 @@ export class VoiceContext {
     const state = this.state(agent?.session?.id);
     if (!state || state.agent === agent || !agent.ctx?.tools) return;
     state.offTool?.(); state.agent = agent;
-    state.offTool = agent.ctx.tools.register({ name: 'voicebox_progress',
+    const offProgress = agent.ctx.tools.register({ name: 'voicebox_progress',
       description: 'Register sections already explained in visible assistant text for the current detailed voice plan. This tracks model coverage claims, not playback or correctness. Call after a section, not each sentence.',
       parameters: { type: 'object', properties: { covered: { type: 'array', items: { type: 'string' } } }, required: ['covered'], additionalProperties: false },
       output: { schema: { type: 'object', properties: { pending: { type: 'array', items: { type: 'string' } } }, required: ['pending'], additionalProperties: false },
@@ -89,6 +92,26 @@ export class VoiceContext {
         return { pending: state.plan.pending().map(unit => unit.id) };
       },
     });
+    const offBranch = agent.ctx.tools.register({ name: 'voicebox_branch',
+      description: 'After a visible answer in a temporary voice discussion, decide whether to wait for a user answer, resume the suspended detailed explanation after playback, or abandon it for a new topic. Never reports audio as played.',
+      parameters: { type: 'object', properties: { action: { type: 'string', enum: ['wait', 'resume', 'abandon'] } }, required: ['action'], additionalProperties: false },
+      output: { schema: { type: 'object', properties: { action: { type: 'string' } }, required: ['action'], additionalProperties: false },
+        render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
+      execute: async (args, exec) => {
+        if (this.state(agent.session.id) !== state || exec.agent !== agent || this.ctx.agents.get(agent.session.id) !== agent || !state.returnPlan) throw new Error('当前没有对应的局部追问');
+        if (!args || Object.keys(args).some(key => key !== 'action') || !['wait', 'resume', 'abandon'].includes(args.action)) throw new Error('无效的追问接续操作');
+        const last = [...agent.session.log].reverse().find(event => event.type === 'assistant/message' && !event.data.interrupted);
+        if (last?.data.turn !== state.explanationTurn || !last?.data.message.content.some(block => block.type === 'text' && block.text.trim())) throw new Error('请先给出当前轮次的可见回答');
+        state.returnDecision = args.action;
+        state.waiting = args.action === 'wait';
+        if (args.action === 'abandon') {
+          state.returnPlan = undefined; state.returnPending = false; state.returnSteps = undefined;
+          state.resumePending = false; state.intent = { ...state.intent, temporary: false };
+        }
+        return { action: args.action };
+      },
+    });
+    state.offTool = () => { offBranch(); offProgress(); };
   }
   observe(session, event) {
     const state = this.state(session.id);
@@ -96,7 +119,7 @@ export class VoiceContext {
     if (event.type === 'turn/start') state.explanationTurn = event.data.turn;
     if (event.type === 'assistant/message' && !event.data.interrupted) {
       const text = (event.data.message.content || []).filter(block => block.type === 'text').map(block => block.text).join('\n').trim();
-      state.waiting = /[？?]\s*$|(?:吗|呢)[。！]?\s*$/u.test(text) && !/(?:要不要继续|是否继续|继续吗)/u.test(text);
+      state.waiting = state.returnDecision === 'wait' || /[？?]\s*$|(?:吗|呢)[。！]?\s*$/u.test(text) && !/(?:要不要继续|是否继续|继续吗)/u.test(text);
       if (text) state.artifactGap = !spokenText(text.replace(/^\s{0,3}#{1,6}\s+.*$/gm, '')).trim();
       if (state.returnPlan && text && !state.artifactGap) state.returnSteps?.add(`${event.data.turn}:${event.data.step ?? 0}`);
     }
@@ -106,12 +129,14 @@ export class VoiceContext {
       const parent = state.plan || state.returnPlan;
       const continuing = intent.continuation && parent;
       const previous = intent.expandPrevious && state.plan ? state.plan.answer : this.answer(session, event.seq);
-      state.returnPlan = intent.temporary ? parent : undefined;
+      const carriedBranch = state.returnPlan && !continuing && !intent.restart && (!intent.expandPrevious || intent.scope === 'target');
+      state.returnPlan = !continuing && (intent.temporary || carriedBranch) ? parent : undefined;
+      state.returnDecision = state.returnPlan ? carriedBranch ? 'pending' : 'auto' : undefined;
       state.returnPlan?.resumeUnheard();
       state.returnSteps = state.returnPlan ? new Set() : undefined; state.returnPending = false;
       state.plan = continuing ? parent : intent.expandPrevious && intent.scope === 'answer' && previous?.text ? new NarrationPlan(previous, text) : undefined;
       if (continuing) { state.plan.resumeUnheard(); state.plan.rounds = 0; state.plan.stalled = 0; state.plan.lastMissing = undefined; }
-      state.intent = intent; state.paused = false; state.resumePending = false;
+      state.intent = { ...intent, temporary: !!state.returnPlan || intent.temporary }; state.paused = false; state.resumePending = false;
       state.waiting = false;
       state.artifactRetries = 0; state.artifactGap = false;
       state.explanationTurn = session.log.filter(entry => entry.type === 'turn/start').at(-1)?.data.turn;
@@ -132,7 +157,7 @@ export class VoiceContext {
     const plan = state.plan;
     const parts = [POLICY, `实际播放状态：${JSON.stringify(state.playback || {})}`];
     if (state.intent?.temporary) parts.push(state.returnPlan
-      ? '本次只解释局部追问，不重讲原答复；完成后插件会接续原来的未完成计划。需要用户回答时先等待。'
+      ? `当前有挂起的原详细讲解。先处理本次局部讨论，不重讲原答复。可见回答之后用 voicebox_branch 登记：需要用户补充就 wait；局部问题已解决、应接回原讲解就 resume；用户换题、纠正或不再需要原讲解就 abandon。登记不会宣称声音已播放，接回仍等待播放完成与录入结束。${state.returnDecision === 'pending' ? '用户的新发言可能是回答、进一步追问或换题，请按上下文判断；登记前插件不会自动接回。' : ''}`
       : '本次是局部追问。先解释目标，再自然接回原答复未讲内容；需要用户回答时先等待。');
     if (plan) {
       parts.push(`用户要求详细展开上一答复。当前源答复范围：${plan.units.map(unit => `${unit.id} ${unit.title}`).join('；')}。这不是新任务或新的用户发言。`);
@@ -173,7 +198,7 @@ export class VoiceContext {
         state.playback = p;
         for (const plan of new Set([state.plan, state.returnPlan])) if (plan) for (const key of p.completedSteps) plan.playedSteps.add(key);
       }
-      if (body.stopped === true) { state.plan = undefined; state.returnPlan = undefined; state.resumePending = false; state.returnPending = false; state.returnSteps = undefined; }
+      if (body.stopped === true) { state.plan = undefined; state.returnPlan = undefined; state.resumePending = false; state.returnPending = false; state.returnSteps = undefined; state.returnDecision = undefined; }
       const resume = state.paused && body.paused !== true;
       state.paused = body.paused === true;
       state.inputPending = body.inputPending === true;
@@ -181,7 +206,7 @@ export class VoiceContext {
       const agent = this.ctx.agents.get(session.id);
       if (resume && state.plan?.pending().length) state.resumePending = true;
       this.maybeResume(agent);
-      return json({ ok: true, plan: state.plan ? { total: state.plan.units.length, remaining: state.plan.pending().length, completed: state.plan.complete(),
+      return json({ ok: true, awaitingAnswer: state.waiting === true, plan: state.plan ? { total: state.plan.units.length, remaining: state.plan.pending().length, completed: state.plan.complete(),
         limited: state.plan.pending().length > 0 && (state.plan.stalled >= 2 || state.plan.rounds >= 8) } : null });
     } catch (error) { return json({ error: error.message || String(error) }, 400); }
   }
