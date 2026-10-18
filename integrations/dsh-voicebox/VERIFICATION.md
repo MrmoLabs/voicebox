@@ -9,7 +9,7 @@
 - 当前已安装 DSH 实测为 `0.2.1-rc.2`，旧的 `rc.1` 单版本声明在官方安装器被拒绝，未使用版本豁免。确认新版本真实宿主回归通过后，将支持范围明确列为 `rc.1 || rc.2`。
 - 使用官方 Desktop CLI / pnpm 与独立 `DSH_HOME`，从随附 Web 模板建立测试 profile，完成基线安装、候选升级、基线回退。每一步都验证配置组合与打包插件在实际 `rc.2` Cordis / Connection / SessionStore 中的加载、60 秒 WAV 转发、作用域上下文及卸载清理。它没有启动新的原生 Desktop 窗口，没有修改用户运行中的 profile。
 - 全新 Python 3.12 CPU venv、匹配 PyTorch / torchaudio `2.11.0+cpu`、关闭便携依赖和模型网络访问后，121 项后端回归通过。62 项插件回归、14 项共享播放 / 历史回归通过，共 197 项；21 个插件源文件 lint 无诊断。CI YAML 已解析并检查 UTF-8 无 BOM。
-- CI 增加 `codex/**` 分支触发、Windows / Linux 插件隔离包验收、共享播放测试与独立 CPU 后端回归。远端 CI 运行结果另记，工作流源码存在不代表远端通过。
+- CI 增加 `codex/**` 分支触发、Windows / Linux 插件隔离包验收、共享播放测试与独立 CPU 后端回归。[提交 3d9c623 的远端运行](https://github.com/MrmoLabs/voicebox/actions/runs/39096830920) 已完成，四组任务全部成功。
 - 原生测试窗口首次安装、真实麦克风多轮与蓝牙音响人耳听测仍待验收。证据根目录 `release/dsh-voicebox-candidate/` 含两个 `.tgz`、SHA-256、安装阶段清单、真实服务只读检查和浏览器截图；不随源码提交模型、录音或用户配置。
 
 ---
