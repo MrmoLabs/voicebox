@@ -17,13 +17,15 @@ def main():
     parser.add_argument('--model-size', default='0.6B')
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--characters', type=int, default=200)
+    parser.add_argument('--client-owned', action='store_true', help='Use /speak without automatic Voicebox playback')
+    parser.add_argument('--preview-mode', choices=['realtime', 'checked'], default='realtime')
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
 
     def request(path, data=None, timeout=600):
         payload = json.dumps(data).encode('utf-8') if data is not None else None
         return urllib.request.urlopen(urllib.request.Request(args.base + path, data=payload,
-            headers={'Content-Type': 'application/json'}), timeout=timeout)
+            headers={'Content-Type': 'application/json', 'X-Voicebox-Client-Id': 'continuity-check'}), timeout=timeout)
 
     for attempt in range(30):
         try:
@@ -45,9 +47,12 @@ def main():
                  '如果模型暂时跟不上播放，播放器会显示缓冲状态；任务成功以后，完整音频仍然保存在历史记录中。')
     text = (paragraph * math.ceil(args.characters / len(paragraph)))[:args.characters]
     started = time.perf_counter()
-    with request('/generate', dict(profile_id=args.profile_id, text=text, language='zh',
-            engine='qwen', model_size=args.model_size, seed=42, normalize=True,
-            max_chunk_chars=160, crossfade_ms=50, stream_audio=True)) as response:
+    payload = (dict(profile=args.profile_id, text=text, language='zh', engine='qwen',
+                    model_size=args.model_size, stream_audio=True, playback_owner='client', personality=False, preview_mode=args.preview_mode)
+               if args.client_owned else dict(profile_id=args.profile_id, text=text, language='zh',
+                    engine='qwen', model_size=args.model_size, seed=42, normalize=True,
+                    max_chunk_chars=160, crossfade_ms=50, stream_audio=True, preview_mode=args.preview_mode))
+    with request('/speak' if args.client_owned else '/generate', payload) as response:
         generation_id = json.load(response)['id']
     (args.output / 'generation-id.txt').write_text(generation_id, encoding='utf-8')
     packets = []

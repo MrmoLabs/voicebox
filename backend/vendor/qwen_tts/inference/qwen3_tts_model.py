@@ -139,6 +139,11 @@ class Qwen3TTSModel:
         # important than the optional compile speedup, so keep eager execution
         # as the default; advanced users may still opt in explicitly.
         optimization_mode = os.environ.get("VOICEBOX_TTS_OPTIMIZE", "0").lower()
+        # Avoid rebuilding HuggingFace generation machinery for each codec
+        # frame. This uses the existing direct loop with identical sampling
+        # parameters; no CUDA graph capture or decoder context reduction.
+        if torch.cuda.is_available() and os.environ.get("VOICEBOX_TTS_FAST_CODEBOOK", "1") != "0":
+            instance.model.talker.enable_fast_codebook_gen(True)
         if torch.cuda.is_available() and optimization_mode != "0":
             try:
                 if optimization_mode in ("codebook", "codebook-safe"):
@@ -842,8 +847,11 @@ class Qwen3TTSModel:
         # Extract streaming params, filter to only supported ones
         gen_kwargs = self._merge_generate_kwargs(**kwargs)
         # Only keep params supported by stream_generate_pcm
+        # Streaming must honor the same token budget and repetition defaults as
+        # ordinary generation; dropping them can leave a stream looping forever.
+        max_frames = min(max_frames, gen_kwargs["max_new_tokens"])
         supported_params = {
-            "do_sample", "top_k", "top_p", "temperature",
+            "do_sample", "top_k", "top_p", "temperature", "repetition_penalty",
             "subtalker_dosample", "subtalker_top_k", "subtalker_top_p", "subtalker_temperature"
         }
         gen_kwargs = {k: v for k, v in gen_kwargs.items() if k in supported_params}

@@ -664,6 +664,9 @@
     }
   },
   "history": {
+    "cancelling": "Stopping generation…",
+    "cancelled": "Generation cancelled",
+    "cancellingDescription": "Waiting for the current GPU operation to finish safely.",
     "empty": "No voice generations, yet…",
     "actions": {
       "menu": "Actions",

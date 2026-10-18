@@ -25,3 +25,10 @@ def test_explicit_engine_is_preserved():
 def test_invalid_explicit_engine_is_rejected():
     with pytest.raises(ValidationError):
         _request(engine="invalid")
+
+
+def test_streaming_strategy_defaults_to_realtime_and_strict_checks_are_explicit():
+    assert _request().preview_mode == 'realtime'
+    assert _request(preview_mode='checked').preview_mode == 'checked'
+    with pytest.raises(ValidationError):
+        _request(preview_mode='unknown')

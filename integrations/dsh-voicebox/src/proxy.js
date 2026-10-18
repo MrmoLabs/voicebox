@@ -1,3 +1,5 @@
+import { WhisperInput } from './listening.js';
+
 /** Exact Connection route: works over Desktop IPC and authenticated Web HTTP. */
 export class VoiceboxProxy {
   constructor(config = {}, fetcher = globalThis.fetch) {
@@ -11,11 +13,13 @@ export class VoiceboxProxy {
     this.generations = new Set();
     this.sessions = new Set();
     this.abort = new AbortController();
+    this.input = new WhisperInput(config, this.endpoint, fetcher, this.abort.signal);
   }
 
   async handle(request) {
     const path = new URL(request.url).searchParams.get('path');
     const json = (value, status = 200) => Response.json(value, { status, headers: { 'cache-control': 'no-store' } });
+    if ((path === '/listen' && request.method === 'POST') || (path === '/listen/status' && request.method === 'GET')) return this.input.handle(request);
     if (path === '/settings' && request.method === 'GET') {
       return json({ ...this.config, streamAudio: true });
     }
@@ -41,6 +45,7 @@ export class VoiceboxProxy {
           profile: this.config.profile || undefined, language: this.config.language || undefined,
           engine: 'qwen', model_size: this.config.modelSize || '0.6B',
           personality: false, stream_audio: true, playback_owner: 'client',
+          preview_mode: this.config.speechMode || 'realtime',
         };
       } else body = { session_id: body.session_id, request_id: body.request_id };
     } else if (request.method === 'GET' && (path === '/openapi.json' || path === '/profiles')) {

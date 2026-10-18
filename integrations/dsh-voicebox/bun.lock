@@ -6,6 +6,8 @@
       "name": "dsh-voicebox",
       "devDependencies": {
         "@deepseek-ai/schemastery": "~3.18.4",
+        "opencc-js": "1.4.2",
+        "thinking-orbs": "0.3.1",
       },
       "peerDependencies": {
         "@deepseek-ai/cordis": "^4.0.2",
@@ -20,5 +22,11 @@
     "@deepseek-ai/schemastery": ["@deepseek-ai/schemastery@3.18.5", "https://registry.npmmirror.com/@deepseek-ai/schemastery/-/schemastery-3.18.5.tgz", { "dependencies": { "@deepseek-ai/cosmokit": "~1.8.6", "@standard-schema/spec": "^1.1.0" } }, "sha512-Mnobvqf9rHsZYv4g5edj5ddxS1oF1kIdSlz0DunUgnY3LWG5F26MqvH3YOOsSaodCgyzJ16OMN9O99/s5Crtdw=="],
 
     "@standard-schema/spec": ["@standard-schema/spec@1.1.0", "https://registry.npmmirror.com/@standard-schema/spec/-/spec-1.1.0.tgz", {}, "sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w=="],
+
+    "opencc-js": ["opencc-js@1.4.2", "https://registry.npmmirror.com/opencc-js/-/opencc-js-1.4.2.tgz", {}, "sha512-EdcspgdROiCCZDM+jZR6Pa670xW+EW2QhctPBQ8gRjg6lrx4IHEl+2s+kt5izk/TkxVRgdWuFgaGkaEdIUfdaw=="],
+
+    "react": ["react@19.3.1", "https://registry.npmmirror.com/react/-/react-19.3.1.tgz", {}, "sha512-QNhWdt7nrgVWWQG58QuGsAR3jv3Hbe4mb4vz7w2csnHavciZJgda1CPNaldF6eVxv90ud3jUXpKlHL69gO38yw=="],
+
+    "thinking-orbs": ["thinking-orbs@0.3.1", "https://registry.npmmirror.com/thinking-orbs/-/thinking-orbs-0.3.1.tgz", { "peerDependencies": { "react": ">=18.0.0" } }, "sha512-3BG1aeB1RUTxItCml/BBuIz5JRM4kZqGuyx+vouv0fXTtcR9ZNoKjWGneHPx94y74GxgArwJZ1qbJR5dt54kSw=="],
   }
 }

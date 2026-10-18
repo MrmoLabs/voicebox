@@ -55,7 +55,11 @@ export class SpeechBridge {
     }
     const turn = this.turns.get(session.id);
     if (!turn) return;
-    if (event.type === 'user/message' && event.data.source?.kind === 'user') {
+    const voiceContinuation = event.data.source?.kind === 'dsh-voicebox' && this.config.voiceContinuation?.();
+    if (event.type === 'user/message' && (event.data.source?.kind === 'user' || voiceContinuation)) {
+      // A next-step notice shares the current queue; a resumed, new turn owns a
+      // fresh queue only after the old playback has drained.
+      if (voiceContinuation && turn.human) return;
       if (this.active && this.active !== session.id) this.interrupt(this.active);
       this.active = session.id;
       this.interrupt(session.id);
@@ -110,7 +114,7 @@ export class SpeechBridge {
   async checkCapabilities() {
     this.capabilities ??= this.request('/openapi.json').then((schema) => {
       const properties = schema.components?.schemas?.SpeakRequest?.properties;
-      if (!properties?.request_id || !properties?.stream_audio || !schema.paths?.['/speak/cancel']) {
+      if (!properties?.request_id || !properties?.stream_audio || !properties?.preview_mode || !schema.paths?.['/speak/cancel']) {
         throw new Error('Update the Voicebox backend and desktop app to the dsh integration build first');
       }
     }).catch((error) => { this.capabilities = undefined; throw error; });
@@ -131,6 +135,7 @@ export class SpeechBridge {
         model_size: this.config.modelSize || '0.6B',
         personality: false,
         stream_audio: this.config.streamAudio !== false,
+        preview_mode: this.config.speechMode || 'realtime',
         playback_owner: this.config.playbackOwner || 'voicebox',
       });
       if (!this.disposed && this.epochs.get(sessionId) === epoch && this.active === sessionId) {

@@ -2,8 +2,8 @@ import { SentenceBuffer, SentenceQueue } from './sentences.js';
 
 /** Live attempt/turn ownership sits above the existing scoped speech transport. */
 export class LiveNarration {
-  constructor(bridge, { play, update, failed }) {
-    Object.assign(this, { bridge, play, update, failed });
+  constructor(bridge, { play, update, failed, delivery, voiceMode = () => false }) {
+    Object.assign(this, { bridge, play, update, failed, delivery, voiceMode });
   }
   reset() { this.queue?.cancel(); this.queue = undefined; this.attempt = undefined; this.blocked = undefined; this.finished = false; this.messageId = undefined; }
   fail(session, turn, error) {
@@ -34,7 +34,7 @@ export class LiveNarration {
           this.ensureQueue(session, turn.turn);
           const attempt = { id: data.attemptId, step: data.step, blocks: new Map(), seq: -1, piece: 0 };
           this.attempt = attempt;
-          attempt.buffer = new SentenceBuffer(text => this.queue.enqueue(text, `live:${turn.turn}:${attempt.id}:${attempt.piece++}`));
+          attempt.buffer = new SentenceBuffer(text => this.queue.enqueue(text, `live:${turn.turn}:${attempt.id}:${attempt.piece++}`, { turn: turn.turn, step: attempt.step ?? 0 }));
         }
         const attempt = this.attempt;
         if (event.seq <= attempt.seq) return;
@@ -70,13 +70,15 @@ export class LiveNarration {
         if (this.attempt && (this.attempt.step === data.step || data.step === undefined)) {
           this.attempt?.buffer.settle((data.message?.content || []).filter(block => block.type === 'text').map(block => block.text).join('\n'));
           this.attempt.settled = true;
+          this.delivery?.seal(turn.turn, data.step ?? this.attempt.step ?? 0);
           this.messageId = data.message?.id;
           if (this.queue) this.update({ activeMessageId: this.messageId });
         } else {
           // Hosts without live frames fall back to one settled text per step.
           this.ensureQueue(session, turn.turn);
-          const buffer = new SentenceBuffer(text => this.queue.enqueue(text, `settled:${turn.turn}:${event.seq}:${this.fallbackPiece++}`));
+          const buffer = new SentenceBuffer(text => this.queue.enqueue(text, `settled:${turn.turn}:${event.seq}:${this.fallbackPiece++}`, { turn: turn.turn, step: data.step ?? 0 }));
           buffer.append((data.message?.content || []).filter(block => block.type === 'text').map(block => block.text).join('\n'), true);
+          this.delivery?.seal(turn.turn, data.step ?? 0);
           this.messageId = data.message?.id;
           this.update({ activeMessageId: this.messageId });
         }
@@ -84,7 +86,10 @@ export class LiveNarration {
         this.bridge.turns.delete(session.id);
         this.finished = true;
         this.update({ turnFinished: true });
-        if (data.reason?.kind !== 'completed') throw new Error('回答中断，已停止本轮播报');
+        if (data.reason?.kind !== 'completed') {
+          if (data.reason?.kind !== 'max-tokens' || !this.voiceMode()) throw new Error('回答中断，已停止本轮播报');
+          this.update({ notice: '模型曾达到输出限制，请留意尚未讲完的内容' });
+        }
         this.attempt?.buffer.finish();
         this.queue?.finish();
       }
@@ -95,6 +100,10 @@ export class LiveNarration {
     this.finished = false; this.messageId = undefined; this.fallbackPiece = 0;
     const epoch = this.bridge.epochs.get(session.id);
     const queue = new SentenceQueue({
+      longForm: this.voiceMode(),
+      queued: item => this.delivery?.enqueue(item),
+      playing: item => this.delivery?.playing(item),
+      played: item => this.delivery?.played(item),
       prepare: item => {
         if (this.queue !== queue) return;
         this.update({ waitingForText: false });

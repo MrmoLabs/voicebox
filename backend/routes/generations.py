@@ -160,6 +160,7 @@ async def generate_speech(
             max_chunk_chars=data.max_chunk_chars,
             crossfade_ms=data.crossfade_ms,
             stream_audio=data.stream_audio,
+            preview_mode=data.preview_mode,
         )
     )
 
@@ -318,16 +319,23 @@ async def regenerate_generation(generation_id: str, db: Session = Depends(get_db
 
 @router.post("/generate/{generation_id}/cancel")
 async def cancel_generation(generation_id: str, db: Session = Depends(get_db)):
-    """Cancel a queued or running generation."""
+    """Cancel active work; terminal generations are an idempotent success."""
     gen = db.query(DBGeneration).filter_by(id=generation_id).first()
     if not gen:
         raise HTTPException(status_code=404, detail="Generation not found")
 
     if (gen.status or "completed") not in ("loading_model", "generating"):
-        raise HTTPException(status_code=400, detail="Only active generations can be cancelled")
+        return {"id": generation_id, "status": gen.status or "completed",
+                "message": "Generation already finished"}
 
     cancellation_state = cancel_generation_job(generation_id)
     if cancellation_state is None:
+        # Completion can win the race after our first read. Never turn a
+        # successfully completed generation into an orphaned failure.
+        db.refresh(gen)
+        if (gen.status or "completed") not in ("loading_model", "generating"):
+            return {"id": generation_id, "status": gen.status or "completed",
+                    "message": "Generation already finished"}
         # Row says active but the worker is no longer tracking it — the gen
         # coroutine exited without writing a terminal status (most often a
         # SQLite lock racing with the failed-status write inside the worker's
@@ -342,7 +350,7 @@ async def cancel_generation(generation_id: str, db: Session = Depends(get_db)):
             db=db,
             error="Generation orphaned by worker",
         )
-        return {"message": "Orphaned generation cleared"}
+        return {"id": generation_id, "status": "failed", "message": "Orphaned generation cleared"}
 
     if cancellation_state == "queued":
         from ..utils.live_audio import finish_live_audio
@@ -355,9 +363,9 @@ async def cancel_generation(generation_id: str, db: Session = Depends(get_db)):
             db=db,
             error="Generation cancelled",
         )
-        return {"message": "Queued generation cancelled"}
+        return {"id": generation_id, "status": "failed", "message": "Queued generation cancelled"}
 
-    return {"message": "Generation cancellation requested"}
+    return {"id": generation_id, "status": gen.status, "message": "Generation cancellation requested"}
 
 
 @router.get("/generate/{generation_id}/status")

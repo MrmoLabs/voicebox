@@ -1,4 +1,6 @@
-export const SETTING_FIELDS = ['endpoint', 'clientId', 'profile', 'language', 'modelSize', 'readingMode', 'sessionIds'];
+import { VOICE_DEFAULTS } from './voice-config.js';
+
+export const SETTING_FIELDS = ['endpoint', 'clientId', 'profile', 'language', 'modelSize', 'readingMode', 'speechMode', 'sessionIds', ...Object.keys(VOICE_DEFAULTS)];
 
 export function validateSettings(value) {
   let endpoint;
@@ -9,6 +11,11 @@ export function validateSettings(value) {
   if (!value.clientId?.trim()) throw new Error('客户端标识不能为空');
   if (!['0.6B', '1.7B'].includes(value.modelSize)) throw new Error('请选择受支持的 Qwen Base 模型');
   if (!['complete', 'streaming'].includes(value.readingMode)) throw new Error('请选择自动播报方式');
+  if (!['realtime', 'checked'].includes(value.speechMode)) throw new Error('请选择语音输出策略');
+  if (!['base', 'small', 'medium', 'large', 'turbo'].includes(value.recognitionModel)) throw new Error('请选择 Whisper 识别模型');
+  if (!['simplified', 'original'].includes(value.recognitionScript)) throw new Error('请选择中文识别文字格式');
+  if (!['fast', 'balanced', 'patient'].includes(value.patience)) throw new Error('请选择停顿耐心');
+  if (typeof value.allowInterrupt !== 'boolean' || typeof value.backgroundListening !== 'boolean' || typeof value.microphoneId !== 'string' || typeof value.recognitionLanguage !== 'string') throw new Error('语音输入设置无效');
   if (!Array.isArray(value.sessionIds) || value.sessionIds.some(id => typeof id !== 'string' || !id.trim() || id.length > 200)) throw new Error('会话白名单中存在无效 ID');
   return value;
 }

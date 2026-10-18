@@ -663,6 +663,9 @@
     }
   },
   "history": {
+    "cancelling": "正在停止生成…",
+    "cancelled": "已取消生成",
+    "cancellingDescription": "正在等待目前的 GPU 運算安全結束。",
     "empty": "尚無語音生成…",
     "actions": {
       "menu": "操作",

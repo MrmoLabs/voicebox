@@ -7,7 +7,7 @@ import { DesktopSpeechController } from '../src/controller.js';
 
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const sentence = n => `这是第${n}段正在逐步生成的正文内容，完整句子出现以后就可以开始朗读。`;
-const capabilities = { paths: { '/speak/cancel': {} }, components: { schemas: { SpeakRequest: { properties: { request_id: {}, stream_audio: {} } } } } };
+const capabilities = { paths: { '/speak/cancel': {} }, components: { schemas: { SpeakRequest: { properties: { request_id: {}, stream_audio: {}, preview_mode: {} } } } } };
 
 test('sentence cursor survives fragmented fences, links, inline code, comments and decimal numbers', () => {
   const pieces = [];
@@ -19,7 +19,8 @@ test('sentence cursor survives fragmented fences, links, inline code, comments a
   assert.ok(pieces.length >= 2);
   assert.match(result, /公开文档/);
   assert.match(result, /3\.14/);
-  assert.doesNotMatch(result, /secret|private|hidden|https|js/);
+  assert.match(result, /private inline/, 'inline identifiers are spoken rather than silently deleted');
+  assert.doesNotMatch(result, /secret|private table|hidden|https|js/);
   assert.equal(result.match(/第1段/g).length, 1);
   const imagePieces = [];
   const splitImage = new SentenceBuffer(text => imagePieces.push(text));
@@ -54,6 +55,17 @@ function setup() {
   return { live, bridge, requests, plays, releases, states, send, chunk, begin, state: () => state,
     speech: () => requests.filter(r => r.path === '/speak'), setAttempt: id => { attempt = id; } };
 }
+
+test('checked narration can start at a natural clause without creating an oversized next batch', () => {
+  const pieces = [];
+  const buffer = new SentenceBuffer(text => pieces.push(text));
+  const text = '这是流式语音的实际验收。文字可以一次输入，声音会在后面的内容生成完成以前开始返回。';
+  for (const character of text) buffer.append(character);
+  buffer.finish();
+  assert.equal(pieces[0], '这是流式语音的实际验收。文字可以一次输入，');
+  assert.equal(pieces.join(''), text);
+  assert.ok(pieces.every(piece => piece.length <= 80));
+});
 
 test('first sentence starts before turn end; only one ahead is prepared; final settlement never replays text', async () => {
   const h = setup(); h.begin();

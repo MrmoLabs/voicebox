@@ -116,25 +116,30 @@ def finish_live_audio(generation_id, status):
     create_background_task(expire())
 
 
-def live_text_chunks(text, max_chars=160, first_chars=40):
+def live_text_chunks(text, max_chars=80):
     text = text.strip()
     if not text:
         raise ValueError("Text cannot be empty")
-    first = split_text_into_chunks(text, first_chars)[0]
-    return [first] + split_text_into_chunks(text[len(first):], max_chars)
+    # The caller already sends short sentences for incremental narration.
+    # Splitting every request into a tiny opener and a much longer next clause
+    # drains the opener before the next checked clause can become available.
+    return split_text_into_chunks(text, max_chars)
 
 
 async def generate_live_audio(backend, generation_id, text, prompt, *, language, seed,
-                              instruct, crossfade_ms=50, max_chunk_chars=160):
+                              instruct, crossfade_ms=50, max_chunk_chars=80, preview_mode="realtime"):
     state = get_live_audio(generation_id)
-    chunks = live_text_chunks(text, max_chunk_chars)
+    # Callers may still pass the ordinary-generation chunk preference (800 or
+    # more); a checked preview must keep its own, smaller publication boundary.
+    chunks = live_text_chunks(text, min(max_chunk_chars, 80))
     total_chars = sum(map(len, chunks))
     completed_chars = 0
     tail = np.empty(0, dtype=np.float32)
     generation_progress.chunks(generation_id, 0, len(chunks), 0, total_chars)
     for index, chunk_text in enumerate(chunks):
         first_packet = True
-        stream = backend.generate_stream(chunk_text, prompt, language,
+        generate = backend.generate_stream_checked if preview_mode == "checked" else backend.generate_stream
+        stream = generate(chunk_text, prompt, language,
                                          seed + index if seed is not None else None, instruct)
         try:
             async for pcm, sr in stream:

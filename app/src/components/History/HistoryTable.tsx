@@ -55,6 +55,7 @@ import type {
 } from '@/lib/api/types';
 import { BOTTOM_SAFE_AREA_PADDING } from '@/lib/constants/ui';
 import {
+  useActiveGenerationSnapshots,
   useClearFailedGenerations,
   useDeleteGeneration,
   useExportGeneration,
@@ -65,6 +66,12 @@ import {
 } from '@/lib/hooks/useHistory';
 import { cn } from '@/lib/utils/cn';
 import { formatDate, formatDuration, formatEngineName } from '@/lib/utils/format';
+import {
+  isActiveGeneration,
+  isCancelledGeneration,
+  mergeHistoryPage,
+  reconcileHistory,
+} from '@/lib/utils/history';
 import { useGenerationStore } from '@/stores/generationStore';
 import { usePlayerStore } from '@/stores/playerStore';
 
@@ -72,6 +79,7 @@ export function HistoryTable() {
   const { t } = useTranslation();
   const [page, setPage] = useState(0);
   const [allHistory, setAllHistory] = useState<HistoryResponse[]>([]);
+  const [cancellingIds, setCancellingIds] = useState<Set<string>>(new Set());
   const [total, setTotal] = useState(0);
   const [isScrolled, setIsScrolled] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -118,11 +126,19 @@ export function HistoryTable() {
   const importGeneration = useImportGeneration();
   const cancelGeneration = useMutation({
     mutationFn: (generationId: string) => apiClient.cancelGeneration(generationId),
-    onSuccess: async (data) => {
+    onSuccess: async (data, generationId) => {
+      if (isActiveGeneration(data)) {
+        setCancellingIds((previous) => new Set([...previous, generationId]));
+      }
       await queryClient.invalidateQueries({ queryKey: ['history'] });
       toast({
-        title: 'Cancelling generation',
-        description: data.message,
+        title:
+          data.status === 'completed'
+            ? 'Generation already completed'
+            : data.status === 'failed'
+              ? 'Generation stopped'
+              : t('history.cancelling'),
+        description: isActiveGeneration(data) ? t('history.cancellingDescription') : data.message,
       });
     },
     onError: (error) => {
@@ -131,6 +147,22 @@ export function HistoryTable() {
         description: error instanceof Error ? error.message : 'Could not cancel generation',
         variant: 'destructive',
       });
+    },
+    onSettled: async (_data, _error, generationId) => {
+      // The request may race with completion, or its response may be lost.
+      // Update this exact row even when the list observer is on another page.
+      try {
+        const snapshot = await queryClient.fetchQuery({
+          queryKey: ['history', generationId],
+          queryFn: () => apiClient.getGeneration(generationId),
+          staleTime: 0,
+        });
+        setAllHistory((previous) => reconcileHistory(previous, [snapshot]));
+      } catch {
+        // Keep the last known state; the active-row observer retries recovery.
+      } finally {
+        void queryClient.invalidateQueries({ queryKey: ['history'] });
+      }
     },
   });
   const addPendingGeneration = useGenerationStore((state) => state.addPendingGeneration);
@@ -149,15 +181,28 @@ export function HistoryTable() {
         // Reset to first page
         setAllHistory(historyData.items);
       } else {
-        // Append new items, avoiding duplicates
-        setAllHistory((prev) => {
-          const existingIds = new Set(prev.map((item) => item.id));
-          const newItems = historyData.items.filter((item) => !existingIds.has(item.id));
-          return [...prev, ...newItems];
-        });
+        setAllHistory((prev) => mergeHistoryPage(prev, historyData.items));
       }
     }
   }, [historyData, page]);
+
+  const activeSnapshots = useActiveGenerationSnapshots(
+    allHistory.filter(isActiveGeneration).map((item) => item.id),
+  );
+  useEffect(() => {
+    if (activeSnapshots.length) {
+      setAllHistory((previous) => reconcileHistory(previous, activeSnapshots));
+    }
+  }, [activeSnapshots]);
+
+  useEffect(() => {
+    setCancellingIds((previous) => {
+      if (!previous.size) return previous;
+      const active = new Set(allHistory.filter(isActiveGeneration).map((item) => item.id));
+      const next = new Set([...previous].filter((id) => active.has(id)));
+      return next.size === previous.size ? previous : next;
+    });
+  }, [allHistory]);
 
   useEffect(() => {
     const availableIds = new Set(allHistory.map((item) => item.id));
@@ -656,11 +701,13 @@ export function HistoryTable() {
               const isInProgress = gen.status === 'loading_model' || gen.status === 'generating';
               const isGenerating = isInProgress;
               const isFailed = gen.status === 'failed';
+              const isCancelled = isCancelledGeneration(gen);
               const isPlayable = !isGenerating && !isFailed;
               const hasVersions = gen.versions && gen.versions.length > 1;
               const isVersionsExpanded = expandedVersionsId === gen.id;
               const isCancelling =
-                cancelGeneration.isPending && cancelGeneration.variables === gen.id;
+                cancellingIds.has(gen.id) ||
+                (cancelGeneration.isPending && cancelGeneration.variables === gen.id);
               return (
                 <div
                   key={gen.id}
@@ -680,13 +727,17 @@ export function HistoryTable() {
                       isVersionsExpanded && 'rounded-b-none',
                     )}
                     aria-label={
-                      isGenerating
-                        ? `Generating speech for ${gen.profile_name}...`
-                        : isFailed
-                          ? `Generation failed for ${gen.profile_name}`
-                          : isCurrentlyPlaying
-                            ? `Sample from ${gen.profile_name}, ${formatDuration(gen.duration ?? 0)}, ${formatDate(gen.created_at)}. Playing. Press Enter to restart.`
-                            : `Sample from ${gen.profile_name}, ${formatDuration(gen.duration ?? 0)}, ${formatDate(gen.created_at)}. Press Enter to play.`
+                      isCancelling
+                        ? t('history.cancelling')
+                        : isCancelled
+                          ? t('history.cancelled')
+                          : isGenerating
+                            ? `Generating speech for ${gen.profile_name}...`
+                            : isFailed
+                              ? `Generation failed for ${gen.profile_name}`
+                              : isCurrentlyPlaying
+                                ? `Sample from ${gen.profile_name}, ${formatDuration(gen.duration ?? 0)}, ${formatDate(gen.created_at)}. Playing. Press Enter to restart.`
+                                : `Sample from ${gen.profile_name}, ${formatDuration(gen.duration ?? 0)}, ${formatDate(gen.created_at)}. Press Enter to play.`
                     }
                     onMouseDown={(e) => {
                       if (!isPlayable) return;
@@ -738,7 +789,11 @@ export function HistoryTable() {
                           {formatEngineName(gen.engine, gen.model_size)}
                         </span>
                         {isFailed ? (
-                          <span className="text-xs text-destructive">Failed</span>
+                          <span
+                            className={cn('text-xs', isCancelled ? 'text-muted-foreground' : 'text-destructive')}
+                          >
+                            {isCancelled ? t('history.cancelled') : 'Failed'}
+                          </span>
                         ) : !isGenerating ? (
                           <span className="text-xs text-muted-foreground">
                             {formatDuration(gen.duration ?? 0)}
@@ -746,7 +801,11 @@ export function HistoryTable() {
                         ) : null}
                       </div>
                       <div className="text-xs text-muted-foreground">
-                        {isInProgress ? (
+                        {isCancelling ? (
+                          <span role="status" title={t('history.cancellingDescription')}>
+                            {t('history.cancelling')}
+                          </span>
+                        ) : isInProgress ? (
                           <GenerationProgress id={gen.id} loadingModel={gen.status === 'loading_model'} />
                         ) : (
                           formatDate(gen.created_at)
@@ -827,7 +886,7 @@ export function HistoryTable() {
                           variant="ghost"
                           size="icon"
                           className="h-6 w-6 text-muted-foreground/50 hover:bg-muted-foreground/20 hover:text-muted-foreground"
-                          aria-label="Cancel generation"
+                          aria-label={isCancelling ? t('history.cancelling') : 'Cancel generation'}
                           disabled={isCancelling}
                           onClick={() => cancelGeneration.mutate(gen.id)}
                         >

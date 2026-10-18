@@ -1,5 +1,6 @@
 import { SpeechBridge, spokenText } from './bridge.js';
 import { LiveNarration } from './live.js';
+import { DeliveryLedger } from './delivery.js';
 
 /** Consume only new durable deltas; restored history is available for manual read. */
 export class ReplyObserver {
@@ -53,14 +54,17 @@ export class DesktopSpeechController {
     this.ctx = ctx;
     this.play = play;
     this.listeners = new Set();
-    this.state = { enabled: false, phase: 'idle', elapsed: 0, latest: '', activeMessageId: undefined, error: '' };
+    this.playbackHolds = new Set();
+    this.audioEpoch = 0;
+    this.delivery = new DeliveryLedger();
+    this.state = { enabled: false, voiceActive: false, phase: 'idle', elapsed: 0, latest: '', activeMessageId: undefined, error: '' };
     this.messages = new Map();
     this.readingMode = form?.getSnapshot().value?.readingMode || 'complete';
     this.offSettings = form?.subscribe(() => {
       const mode = form.getSnapshot().value?.readingMode || 'complete';
       if (mode !== this.readingMode) { this.stop(); this.readingMode = mode; }
     });
-    this.bridge = new SpeechBridge({ endpoint: 'http://voicebox.invalid', playbackOwner: 'client' }, {
+    this.bridge = new SpeechBridge({ endpoint: 'http://voicebox.invalid', playbackOwner: 'client', voiceContinuation: () => this.state.voiceActive }, {
       fetch: speechFetch,
       warn: (error) => this.update({ phase: 'error', error }),
       onInterrupt: () => this.silence(),
@@ -71,17 +75,30 @@ export class DesktopSpeechController {
       play: generation => this.playGeneration(generation, true),
       update: values => this.update({ ...values, ...(this.userPaused && values.phase === 'buffering' ? { phase: 'paused' } : {}) }),
       failed: values => this.update(values),
+      voiceMode: () => this.state.voiceActive,
+      delivery: {
+        enqueue: item => this.delivery.enqueue(item),
+        playing: id => this.delivery.playing(id),
+        played: id => { this.delivery.played(id); void this.conversation?.syncContext?.().catch(() => {}); },
+        seal: (turn, step) => { this.delivery.seal(turn, step); void this.conversation?.syncContext?.().catch(() => {}); },
+      },
     });
   }
   getSnapshot = () => this.state;
   subscribe = (listener) => { this.listeners.add(listener); return () => this.listeners.delete(listener); };
-  update(values) { this.state = { ...this.state, ...values }; for (const listener of this.listeners) listener(); }
+  playbackPaused() { return this.userPaused || this.playbackHolds.size > 0; }
+  update(values) {
+    if (this.playbackPaused() && ['buffering', 'playing'].includes(values.phase)) values = { ...values, phase: 'paused' };
+    this.state = { ...this.state, ...values }; for (const listener of this.listeners) listener();
+  }
   select(id) {
     const list = this.ctx.sessions.list.getSnapshot();
     if (id === this.sessionId) return;
+    this.conversation?.end();
     this.stop();
     this.offEvents?.(); this.offSession?.();
     this.sessionId = id;
+    this.delivery.reset();
     this.messages.clear();
     this.update({ latest: '', enabled: id ? localStorage.getItem(`dsh-voicebox:${id}`) === 'on' : false });
     if (!id) return;
@@ -91,15 +108,16 @@ export class DesktopSpeechController {
     const handleAuto = (event) => {
       // The selected session keeps narrating when Desktop loses focus or is minimized.
       // Dropping background deltas would also break the streaming sentence cursor.
-      if (this.state.enabled && !binding.session.getSnapshot().subagent) {
-        if (this.readingMode === 'streaming') this.live.handle(session, event);
+      if ((this.state.enabled || this.state.voiceActive) && !binding.session.getSnapshot().subagent) {
+        if (this.readingMode === 'streaming' || this.state.voiceActive) this.live.handle(session, event);
         else this.bridge.handle(session, event);
       }
     };
     const observer = new ReplyObserver(handleAuto, (latest) => this.update({ latest }), () => {
+      this.conversation?.end();
       this.stop();
       this.update({ latest: '' });
-    }, event => { if (this.readingMode === 'streaming') handleAuto(event); });
+    }, event => { if (this.readingMode === 'streaming' || this.state.voiceActive) handleAuto(event); });
     const accept = (initial = false) => {
       const snapshot = binding.eventSource.getSnapshot();
       const change = snapshot.change;
@@ -137,6 +155,7 @@ export class DesktopSpeechController {
     this.update({ enabled });
   }
   messageText(messageId) { return this.messages.get(messageId) || ''; }
+  setVoiceActive(active) { this.stop(); this.update({ voiceActive: active }); }
   read(messageId) {
     const text = messageId === undefined ? this.state.latest : this.messageText(messageId);
     if (!this.sessionId || !text) return;
@@ -147,10 +166,13 @@ export class DesktopSpeechController {
     this.bridge.track(this.bridge.speak(this.sessionId, `manual:${crypto.randomUUID()}`, text, this.bridge.epochs.get(this.sessionId)));
   }
   silence() {
+    this.delivery.interrupt();
+    this.audioEpoch++;
     this.live?.reset();
     this.playAbort?.abort(); this.playAbort = undefined;
     this.userPaused = false;
-    this.update({ activeMessageId: undefined, activeTurn: undefined, live: false, waitingForText: false, phase: 'idle', elapsed: 0, error: '' });
+    this.playbackHolds.clear();
+    this.update({ activeMessageId: undefined, activeTurn: undefined, playbackText: '', inputHeld: false, live: false, waitingForText: false, phase: 'idle', elapsed: 0, error: '' });
   }
   stop() {
     this.silence();
@@ -162,17 +184,18 @@ export class DesktopSpeechController {
     const abort = new AbortController();
     this.playAbort = abort;
     const offset = continuation ? this.state.elapsed : 0;
-    this.update({ phase: this.userPaused ? 'paused' : 'buffering', waitingForText: false });
+    this.hasPlaybackProgress = false;
+    this.update({ phase: this.playbackPaused() ? 'paused' : 'buffering', waitingForText: false, playbackText: generation.text || '' });
     try {
       this.audio ??= new AudioContext();
       // A paused reply suspends the shared context. The next reply starts
       // afresh after prior nodes have been stopped, using the existing grant.
-      if (this.audio.state === 'suspended' && this.audioUnlocked && !this.userPaused) await this.audio.resume();
+      await this.syncPlaybackPause();
       if (abort.signal.aborted) return;
-      if (this.audio.state !== 'running' && !(continuation && this.userPaused)) throw new Error('请点击回复下方的“朗读”启用音频播放');
+      if (this.audio.state !== 'running' && !this.playbackPaused()) throw new Error('请点击回复下方的“朗读”启用音频播放');
       await this.play({ generation_id: generation.id, stream_audio: true }, 'http://voicebox.invalid', abort.signal,
-        (elapsed) => { if (!abort.signal.aborted) this.update({ elapsed: offset + elapsed, phase: this.audio.state === 'suspended' ? 'paused' : 'playing' }); },
-        { fetch: speechFetch, context: this.audio, resume: !continuation });
+        (elapsed, buffering = false) => { if (!abort.signal.aborted) { this.hasPlaybackProgress = true; this.update({ elapsed: offset + elapsed, phase: this.audio.state === 'suspended' ? 'paused' : buffering ? 'buffering' : 'playing' }); } },
+        { fetch: speechFetch, context: this.audio, resume: false, initialBufferSeconds: continuation && offset > 0 ? 0.04 : 0.8 });
       if (!abort.signal.aborted && !continuation) this.update({ activeMessageId: undefined, phase: 'idle', elapsed: 0 });
     } catch (error) {
       if (!abort.signal.aborted) {
@@ -184,17 +207,45 @@ export class DesktopSpeechController {
     }
   }
   pause() {
-    const owner = this.playAbort;
-    if (!this.audio || !owner || owner.signal.aborted) return;
-    const paused = this.audio.state === 'suspended';
-    this.userPaused = !paused;
-    void (paused ? this.audio.resume() : this.audio.suspend()).then(() => {
-      if (this.playAbort === owner && !owner.signal.aborted) this.update({ phase: paused ? 'playing' : 'paused' });
-    }).catch((error) => {
-      if (this.playAbort === owner && !owner.signal.aborted) this.update({ phase: 'error', error: error.message });
-    });
+    if (!this.audio || !this.playAbort || this.playAbort.signal.aborted || this.playbackHolds.size) return;
+    void this.setPaused(!this.userPaused);
+  }
+  async setPaused(paused) {
+    this.userPaused = paused;
+    await this.syncPlaybackPause();
+    await this.conversation?.syncContext?.().catch(error => this.update({ notice: error.message }));
+  }
+  // A temporary input hold preserves scheduled nodes and the user's own pause.
+  // Stop invalidates the lease, so a late ASR result cannot resume a new reply.
+  holdPlayback() {
+    const lease = Symbol('voice input');
+    this.playbackHolds.add(lease);
+    this.update({ inputHeld: true });
+    void this.syncPlaybackPause();
+    return {
+      isCurrent: () => this.playbackHolds.has(lease),
+      release: () => {
+        if (!this.playbackHolds.delete(lease)) return;
+        this.update({ inputHeld: this.playbackHolds.size > 0 });
+        void this.syncPlaybackPause();
+      },
+    };
+  }
+  syncPlaybackPause() {
+    const context = this.audio, epoch = this.audioEpoch;
+    this.audioTransition = (this.audioTransition || Promise.resolve()).then(async () => {
+      if (!context || this.audio !== context || epoch !== this.audioEpoch || context.state === 'closed') return;
+      const owner = this.playAbort;
+      if (this.playbackPaused()) await context.suspend();
+      else if (owner && !owner.signal.aborted && this.audioUnlocked) await context.resume();
+      if (epoch === this.audioEpoch && owner && this.playAbort === owner && !owner.signal.aborted) {
+        this.update({ phase: this.playbackPaused() ? 'paused' : this.state.waitingForText || !this.hasPlaybackProgress ? 'buffering' : 'playing' });
+      }
+    }).catch(error => { if (epoch === this.audioEpoch) this.update({ phase: 'error', error: error.message || String(error) }); });
+    return this.audioTransition;
   }
   async dispose() {
+    this.conversation?.dispose();
     this.stop(); this.offEvents?.(); this.offSession?.(); this.offSettings?.();
     await this.bridge.dispose();
     await this.audio?.close();

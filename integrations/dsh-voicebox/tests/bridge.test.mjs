@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { SpeechBridge, spokenText } from '../src/bridge.js';
 
 const schema = { paths: { '/speak/cancel': {} }, components: { schemas: {
-  SpeakRequest: { properties: { request_id: {}, stream_audio: {} } },
+  SpeakRequest: { properties: { request_id: {}, stream_audio: {}, preview_mode: {} } },
 } } };
 
 function setup(config = {}, intercept) {
@@ -46,7 +46,7 @@ test('reads final assistant text once with stable identity and no personality re
   assert.deepEqual(speech()[0].data, {
     text: '完成\n可以使用了。', session_id: 'session-a', request_id: '1:31',
     engine: 'qwen', model_size: '0.6B', personality: false,
-    stream_audio: true, playback_owner: 'voicebox',
+    stream_audio: true, playback_owner: 'voicebox', preview_mode: 'realtime',
   });
 });
 

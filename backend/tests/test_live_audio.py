@@ -66,11 +66,12 @@ async def test_long_text_streams_before_next_segment_and_spool_matches_crossfade
                 yield np.ones(1000, dtype=np.float32), 24000
 
     audio, rate = await live_audio.generate_live_audio(Backend(), 'job', text, {},
-        language='zh', seed=10, instruct=None, crossfade_ms=10)
+        language='zh', seed=10, instruct=None, crossfade_ms=10, max_chunk_chars=800)
     assert isinstance(audio, np.memmap)
     assert rate == 24000
     assert len(audio) == len(segments) * 2000 - (len(segments) - 1) * 240
     assert calls == [(segment, 10 + index) for index, segment in enumerate(segments)]
+    assert all(len(segment) <= 80 for segment, _ in calls)
     np.testing.assert_allclose(audio, 1, atol=1e-6)
     normalized = live_audio.normalize_spooled_audio(audio, tmp_path / 'normalized.f32')
     np.testing.assert_allclose(normalized, normalize_audio(np.asarray(audio)), atol=1e-6)
@@ -79,8 +80,16 @@ async def test_long_text_streams_before_next_segment_and_spool_matches_crossfade
     live_audio._live.pop('job')
 
 
+def test_checked_short_sentences_are_not_split_into_a_tiny_opener_and_a_long_tail():
+    text = '短开头。后面的正文还在同一句语音请求内，不应先播完短开头，再等待剩下的内容生成。'
+    assert len(text) < 80
+    assert live_audio.live_text_chunks(text) == [text]
+
+
 @pytest.mark.asyncio
 async def test_cancel_joins_producer_before_next_inference(monkeypatch):
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr('backend.backends.pytorch_backend.check_preview_content', AsyncMock())
     backend = PyTorchTTSBackend()
     backend.device = 'cpu'
     backend._current_model_size = backend.model_size
@@ -95,7 +104,7 @@ async def test_cancel_joins_producer_before_next_inference(monkeypatch):
             calls.append(kwargs['text'])
             try:
                 for _ in range(100):
-                    yield np.zeros(100, dtype=np.float32), 24000
+                    yield np.full(100, .1, dtype=np.float32), 24000
             finally:
                 running.clear()
                 exited.set()

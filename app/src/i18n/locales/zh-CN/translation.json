@@ -664,6 +664,9 @@
     }
   },
   "history": {
+    "cancelling": "正在停止生成…",
+    "cancelled": "已取消生成",
+    "cancellingDescription": "正在等待当前 GPU 运算安全结束。",
     "empty": "暂无语音生成…",
     "actions": {
       "menu": "操作",

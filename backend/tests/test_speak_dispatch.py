@@ -66,7 +66,7 @@ def client(api, identity="dsh-a"):
 
 @pytest.mark.asyncio
 async def test_stream_options_source_and_persistent_idempotence(api):
-    data = body(stream_audio=True, model_size="0.6B", personality=False)
+    data = body(stream_audio=True, model_size="0.6B", personality=False, preview_mode="checked")
     async with client(api) as http:
         first = await http.post("/speak", json=data)
     # Fresh HTTP and database sessions simulate a disconnected caller retry.
@@ -76,6 +76,7 @@ async def test_stream_options_source_and_persistent_idempotence(api):
     assert first.json()["id"] == second.json()["id"]
     assert len(api.calls) == len(api.events) == 1
     request = api.calls[0]
+    assert request.preview_mode == "checked"
     assert (request.source, request.stream_audio, request.model_size, request.personality) == ("rest", True, "0.6B", False)
     assert api.events[0][1]["stream_audio"] is True
     assert api.events[0][1]["session_id"] == "session-a"

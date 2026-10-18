@@ -9,6 +9,48 @@ const start = event('turn/start', { turn: 1 });
 const user = event('user/message', { source: { kind: 'user' } }, 2);
 const end = event('turn/end', { turn: 1, reason: { kind: 'completed' } }, 4);
 const snapshot = (revision, entries, kind = 'append') => ({ revision, entries, change: { kind, entries } });
+const tick = () => new Promise(resolve => setTimeout(resolve, 0));
+
+test('input pause leases span PCM pieces, preserve user pause and cannot resume a replacement reply', async t => {
+  const previous = globalThis.AudioContext;
+  t.after(() => { if (previous === undefined) delete globalThis.AudioContext; else globalThis.AudioContext = previous; });
+  globalThis.AudioContext = class {
+    state = 'running'; resumes = 0;
+    async resume() { this.state = 'running'; this.resumes++; }
+    async suspend() { this.state = 'suspended'; }
+    async close() { this.state = 'closed'; }
+  };
+  const plays = [], releases = [];
+  const controller = new DesktopSpeechController({}, async (job, _base, signal, update, options) => {
+    plays.push({ job, options });
+    if (options.context.state === 'running') update(1200);
+    await new Promise(resolve => { releases.push(resolve); signal.addEventListener('abort', resolve, { once: true }); });
+  });
+  await controller.unlock();
+  const first = controller.playGeneration({ id: 'one', text: '这是正在播放的第一个短句。' }, true);
+  await tick();
+  const hold = controller.holdPlayback(); await tick();
+  assert.equal(controller.audio.state, 'suspended'); assert.equal(controller.state.elapsed, 1200);
+  releases.shift()(); await first;
+  const second = controller.playGeneration({ id: 'two', text: '这是下一个短句。' }, true);
+  await tick();
+  assert.equal(plays.length, 2); assert.equal(plays[1].options.resume, false);
+  assert.equal(plays[0].options.initialBufferSeconds, 0.8);
+  assert.equal(plays[1].options.initialBufferSeconds, 0.04);
+  assert.equal(controller.state.phase, 'paused'); assert.equal(controller.state.elapsed, 1200);
+  hold.release(); await tick(); assert.equal(controller.audio.state, 'running');
+  controller.pause(); await tick();
+  const nested = controller.holdPlayback(); await tick(); nested.release(); await tick();
+  assert.equal(controller.audio.state, 'suspended', 'releasing an input hold does not undo the user pause');
+  const stale = controller.holdPlayback(); await tick();
+  controller.stop(); await second;
+  const replacement = controller.playGeneration({ id: 'new', text: '新的回答' }, true);
+  await tick(); const resumes = controller.audio.resumes;
+  stale.release(); await tick();
+  assert.equal(stale.isCurrent(), false); assert.equal(controller.audio.resumes, resumes);
+  assert.equal(controller.state.playbackText, '新的回答');
+  await controller.dispose(); await replacement;
+});
 
 test('history is manual-only; transient reasoning and prepend never autoplay; settlement is consumed once', () => {
   const seen = [], replies = [];
@@ -62,7 +104,7 @@ test('Desktop keeps manual and automatic speech in the background, stops on subm
   globalThis.__DSH_TRANSPORT__ = { fetch: async (url, init) => {
     const path = new URL(url, 'http://dsh').searchParams.get('path');
     calls.push({ path, body: init.body && JSON.parse(init.body) });
-    return Response.json(path === '/openapi.json' ? { paths: { '/speak/cancel': {} }, components: { schemas: { SpeakRequest: { properties: { request_id: {}, stream_audio: {} } } } } } : { id: 'gen-1' });
+    return Response.json(path === '/openapi.json' ? { paths: { '/speak/cancel': {} }, components: { schemas: { SpeakRequest: { properties: { request_id: {}, stream_audio: {}, preview_mode: {} } } } } } : { id: 'gen-1' });
   } };
   const events = store(snapshot(1, [start, user, reply('History'), end], 'replace'));
   const session = store({ subagent: null, pendingSubmissions: [] });
@@ -76,7 +118,7 @@ test('Desktop keeps manual and automatic speech in the background, stops on subm
   assert.equal(controller.messageText('message-History'), 'History');
   controller.audio = new AudioContext();
   events.set(snapshot(2, [start, user, reply('Fresh'), end]));
-  await controller.bridge.idle();
+  await controller.bridge.idle(); await tick();
   assert.equal(calls.filter((c) => c.path === '/speak').length, 1);
   assert.equal(plays.length, 1); assert.equal(plays[0].job.stream_audio, true);
   assert.equal(controller.state.activeMessageId, 'message-Fresh');
@@ -86,7 +128,7 @@ test('Desktop keeps manual and automatic speech in the background, stops on subm
   assert.equal(controller.state.activeMessageId, 'message-Fresh');
   assert.equal(controller.state.latest, 'Fresh');
   controller.read('message-History');
-  await controller.bridge.idle();
+  await controller.bridge.idle(); await tick();
   assert.equal(calls.filter(c => c.path === '/speak').at(-1).body.text, 'History');
   assert.equal(controller.state.activeMessageId, 'message-History');
   assert.equal(plays[0].signal.aborted, true);
@@ -95,13 +137,13 @@ test('Desktop keeps manual and automatic speech in the background, stops on subm
   document.hidden = true;
   document.hasFocus = () => false;
   document.dispatchEvent(new Event('visibilitychange'));
-  await controller.bridge.idle();
+  await controller.bridge.idle(); await tick();
   assert.equal(plays[1].signal.aborted, false, 'manual reading survives focus loss and minimization');
   assert.equal(controller.state.activeMessageId, 'message-History');
   assert.equal(calls.filter(c => c.path === '/speak/cancel').length, cancelledBeforeBlur);
   await controller.unlock();
   controller.pause();
-  await Promise.resolve();
+  await tick();
   assert.equal(controller.state.phase, 'paused');
   session.set({ subagent: null, pendingSubmissions: [{}] });
   assert.equal(plays[1].signal.aborted, true);
@@ -112,7 +154,7 @@ test('Desktop keeps manual and automatic speech in the background, stops on subm
     event('assistant/message', { turn: 2, message: { id: 'message-AfterPause', content: [{ type: 'text', text: 'After pause' }] } }, 10),
     event('turn/end', { turn: 2, reason: { kind: 'completed' } }, 11),
   ]));
-  await controller.bridge.idle();
+  await controller.bridge.idle(); await tick();
   assert.equal(controller.audio.state, 'running');
   assert.equal(controller.state.activeMessageId, 'message-AfterPause');
   assert.equal(plays.length, 3, 'autoplay resumes the previously unlocked context after stopping a paused reply');
@@ -122,14 +164,14 @@ test('Desktop keeps manual and automatic speech in the background, stops on subm
   assert.equal(controller.state.latest, 'After pause');
   assert.equal(calls.filter((c) => c.path === '/speak').length, 3);
   events.set(snapshot(5, [start, user, reply('Background'), end]));
-  await controller.bridge.idle();
+  await controller.bridge.idle(); await tick();
   assert.equal(calls.filter((c) => c.path === '/speak').length, 4, 'enabled selected session still receives complete replies in the background');
   assert.equal(plays[3].signal.aborted, false);
   document.hidden = false;
   document.hasFocus = () => true;
   document.dispatchEvent(new Event('visibilitychange'));
   window.dispatchEvent(new Event('focus'));
-  await controller.bridge.idle();
+  await controller.bridge.idle(); await tick();
   assert.equal(calls.filter(c => c.path === '/speak').length, 4, 'returning to Desktop must not replay the reply');
   controller.toggle();
   assert.equal(plays[3].signal.aborted, true, 'turning off automatic reading still stops background playback');

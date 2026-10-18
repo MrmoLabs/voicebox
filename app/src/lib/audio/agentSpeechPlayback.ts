@@ -28,8 +28,8 @@ function nextAudio(reader: ReadableStreamDefaultReader<Uint8Array>, signal: Abor
 /** Each call owns its audio nodes; abort silences scheduled audio immediately. */
 export async function playAgentSpeech(
   job: AgentSpeechJob, baseUrl: string, signal: AbortSignal,
-  update: (elapsedMs: number) => void,
-  options: { fetch?: typeof fetch; context?: AudioContext; resume?: boolean } = {},
+  update: (elapsedMs: number, buffering?: boolean) => void,
+  options: { fetch?: typeof fetch; context?: AudioContext; resume?: boolean; initialBufferSeconds?: number } = {},
 ) {
   const id = encodeURIComponent(job.generation_id);
   if (!job.stream_audio) {
@@ -67,7 +67,7 @@ export async function playAgentSpeech(
         played += timeline.shift()!.duration;
       }
       const next = timeline[0];
-      update(1000 * (played + (next ? Math.max(0, Math.min(now - next.start, next.duration)) : 0)));
+      update(1000 * (played + (next ? Math.max(0, Math.min(now - next.start, next.duration)) : 0)), !next || now < next.start);
     }, 100);
     while (!signal.aborted) {
       const { value, done } = await nextAudio(reader, signal);
@@ -82,7 +82,7 @@ export async function playAgentSpeech(
         const node = context.createBufferSource();
         node.buffer = buffer;
         node.connect(context.destination);
-        if (!first) end = context.currentTime + 0.8;
+        if (!first) end = context.currentTime + (options.initialBufferSeconds ?? 0.8);
         else if (end < context.currentTime) end = context.currentTime + 0.3;
         first ||= end;
         node.start(end);

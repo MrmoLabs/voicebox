@@ -6,8 +6,9 @@ from typing import Optional, List, Tuple
 import asyncio
 import logging
 import time
-import queue
+import secrets
 import threading
+import queue
 from dataclasses import asdict, is_dataclass
 import torch
 import numpy as np
@@ -30,6 +31,9 @@ from .base import (
 from ..utils.cache import get_cache_key, get_cached_voice_prompt, cache_voice_prompt
 from ..utils.audio import load_audio
 from ..utils.hf_offline_patch import force_offline_if_cached
+from ..utils.speech_quality import (
+    SpeechQualityError, check_preview_audio, check_preview_content, preview_seconds_limit,
+)
 
 
 class PyTorchTTSBackend:
@@ -296,9 +300,10 @@ class PyTorchTTSBackend:
         return audio, sample_rate
 
     async def generate_stream(self, text, voice_prompt, language="en", seed=None, instruct=None):
-        """Yield PCM with bounded producer memory and cooperative cancellation."""
+        """Incremental PCM; stop on invalid packets without replaying audible text."""
         await self.load_model_async(None)
         async with self._inference_lock:
+            logger.info("Realtime speech preview: chars=%d", len(text))
             packets = queue.Queue(maxsize=4)
             stopped = threading.Event()
             end = object()
@@ -320,6 +325,8 @@ class PyTorchTTSBackend:
                         generator = self.model.stream_generate_voice_clone(
                             text=text, voice_clone_prompt=voice_prompt,
                             language=LANGUAGE_CODE_TO_NAME.get(language, "auto"),
+                            non_streaming_mode=True,
+                            max_frames=max(1, int(preview_seconds_limit(text) * 12.5)),
                             emit_every_frames=8, decode_window_frames=80,
                             use_optimized_decode=False,
                         )
@@ -339,6 +346,7 @@ class PyTorchTTSBackend:
                         put(end)
 
             worker = asyncio.create_task(asyncio.to_thread(produce))
+            samples, rate = 0, None
             try:
                 while True:
                     try:
@@ -350,7 +358,18 @@ class PyTorchTTSBackend:
                         break
                     if isinstance(item, Exception):
                         raise item
-                    yield item
+                    audio, sr = item
+                    if sr <= 0 or audio.ndim != 1 or not np.isfinite(audio).all():
+                        raise SpeechQualityError("语音包含无效采样，已停止流式播报")
+                    if rate is not None and rate != sr:
+                        raise SpeechQualityError("语音采样率发生变化，已停止流式播报")
+                    rate = sr
+                    if not len(audio):
+                        continue
+                    samples += len(audio)
+                    if samples / sr > preview_seconds_limit(text) or np.mean(np.abs(audio) > 1.0) > 0.01:
+                        raise SpeechQualityError("语音时长或削波异常，已停止流式播报")
+                    yield audio, sr
             finally:
                 stopped.set()
                 while not worker.done():
@@ -358,6 +377,77 @@ class PyTorchTTSBackend:
                         await asyncio.shield(worker)
                     except asyncio.CancelledError:
                         continue
+
+    async def generate_stream_checked(self, text, voice_prompt, language="en", seed=None, instruct=None):
+        """Commit a bounded, checked clause before exposing any of its PCM."""
+        await self.load_model_async(None)
+        async with self._inference_lock:
+            initial_seed = seed if seed is not None else secrets.randbits(31)
+            for attempt in range(2):
+                stopped = threading.Event()
+                actual_seed = initial_seed + attempt
+
+                def produce():
+                    manual_seed(actual_seed, self.device)
+                    pieces = []
+                    samples = 0
+                    rate = None
+                    with torch.inference_mode():
+                        generator = self.model.stream_generate_voice_clone(
+                            text=text, voice_clone_prompt=voice_prompt,
+                            language=LANGUAGE_CODE_TO_NAME.get(language, "auto"),
+                            non_streaming_mode=True,
+                            max_frames=max(1, int(preview_seconds_limit(text) * 12.5)),
+                            emit_every_frames=8, decode_window_frames=80,
+                            use_optimized_decode=False,
+                        )
+                        try:
+                            for audio, sample_rate in generator:
+                                if stopped.is_set():
+                                    return None
+                                if rate is not None and rate != sample_rate:
+                                    raise SpeechQualityError("语音采样率发生变化，已拦截")
+                                rate = sample_rate
+                                audio = np.asarray(audio, dtype=np.float32).copy()
+                                if audio.ndim != 1 or not np.isfinite(audio).all():
+                                    raise SpeechQualityError("语音包含无效采样，已拦截")
+                                samples += len(audio)
+                                if rate <= 0 or samples / rate > preview_seconds_limit(text):
+                                    raise SpeechQualityError("语音生成超出短句时长上限，已拦截")
+                                pieces.append(audio)
+                        except RuntimeError as error:
+                            if 'frame limit without an end token' in str(error):
+                                raise SpeechQualityError("语音未正常结束，已拦截") from error
+                            raise
+                        finally:
+                            generator.close()
+                    return np.concatenate(pieces) if pieces else np.empty(0, dtype=np.float32), rate or 24000
+
+                logger.info("Checked speech preview: seed=%d attempt=%d chars=%d", actual_seed, attempt + 1, len(text))
+                worker = asyncio.create_task(asyncio.to_thread(produce))
+                try:
+                    try:
+                        result = await asyncio.shield(worker)
+                    finally:
+                        stopped.set()
+                        while not worker.done():
+                            try:
+                                await asyncio.shield(worker)
+                            except asyncio.CancelledError:
+                                continue
+                    if result is None:
+                        return
+                    audio, sample_rate = result
+                    check_preview_audio(audio, sample_rate, text)
+                    await check_preview_content(audio, sample_rate, text, language)
+                except SpeechQualityError as error:
+                    logger.warning("Speech preview rejected before playback: seed=%d reason=%s", actual_seed, error)
+                    if attempt == 0:
+                        continue
+                    raise
+                self._inference_warmed = True
+                yield audio, sample_rate
+                return
 
 
 class PyTorchSTTBackend:
@@ -368,6 +458,7 @@ class PyTorchSTTBackend:
         self.processor = None
         self.model_size = model_size
         self.device = self._get_device()
+        self._inference_lock = asyncio.Lock()
 
     def _get_device(self) -> str:
         """Get the best available device."""
@@ -444,6 +535,12 @@ class PyTorchSTTBackend:
         language: Optional[str] = None,
         model_size: Optional[str] = None,
     ) -> str:
+        # Quality checks and microphone transcription share this model. Retain
+        # ownership until the GPU worker ends, even when its caller is cancelled.
+        async with self._inference_lock:
+            return await self._transcribe_locked(audio_path, language, model_size)
+
+    async def _transcribe_locked(self, audio_path, language=None, model_size=None):
         """
         Transcribe audio to text.
 
@@ -522,4 +619,5 @@ class PyTorchSTTBackend:
             return transcription.strip()
 
         # Run blocking transcription in thread pool
-        return await asyncio.to_thread(_transcribe_sync)
+        from ..utils.model_runtime import finish_thread
+        return await finish_thread(_transcribe_sync)

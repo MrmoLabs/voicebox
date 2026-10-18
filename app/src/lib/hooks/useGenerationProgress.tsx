@@ -1,10 +1,12 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { ToastAction } from '@/components/ui/toast';
 import { useToast } from '@/components/ui/use-toast';
 import { apiClient } from '@/lib/api/client';
 import { useGenerationSettings } from '@/lib/hooks/useSettings';
 import { condenseError } from '@/lib/utils/errorText';
+import { isCancelledGeneration } from '@/lib/utils/history';
 import { type GenerationProgressData, useGenerationStore } from '@/stores/generationStore';
 import { usePlayerStore } from '@/stores/playerStore';
 import { useLivePlaybackStore } from '@/stores/livePlaybackStore';
@@ -28,6 +30,7 @@ const NON_AUTOPLAY_SOURCES = new Set(['mcp', 'rest', 'audiobook']);
  * if the player is idle.
  */
 export function useGenerationProgress() {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const pendingIds = useGenerationStore((s) => s.pendingGenerationIds);
@@ -139,6 +142,11 @@ export function useGenerationProgress() {
 
             queryClient.refetchQueries({ queryKey: ['history'] });
 
+            if (isCancelledGeneration(data)) {
+              toast({ title: t('history.cancelled') });
+              return;
+            }
+
             const condensed = condenseError(data.error || 'An error occurred during generation');
             toast({
               title: data.status === 'not_found' ? 'Generation not found' : 'Generation failed',
@@ -196,5 +204,6 @@ export function useGenerationProgress() {
     queryClient,
     toast,
     setAudioWithAutoPlay,
+    t,
   ]);
 }

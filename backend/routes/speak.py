@@ -154,6 +154,7 @@ async def speak(
                 personality=bool(personality_flag),
                 model_size=data.model_size,
                 stream_audio=data.stream_audio,
+                preview_mode=data.preview_mode,
                 source="rest",
             ),
             db,

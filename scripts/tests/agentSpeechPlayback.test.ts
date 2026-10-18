@@ -23,3 +23,35 @@ test('a queued PCM piece preserves a suspended shared context and abort stops sc
   expect((await settled).name).toBe('AbortError');
   expect(stopped).toBe(1);
 });
+
+test('a prepared continuation starts promptly and reports a real PCM starvation as buffering', async () => {
+  const starts: number[] = [], progress: Array<{ elapsed: number; buffering: boolean | undefined }> = [];
+  let release: ReadableStreamDefaultController<Uint8Array>;
+  const context = {
+    state: 'running', currentTime: 10, destination: {},
+    createBuffer(_channels: number, count: number, rate: number) { return { duration: count / rate, getChannelData: () => new Float32Array(count) }; },
+    createBufferSource() { return { connect() {}, disconnect() {}, start(at: number) { starts.push(at); }, stop() {} }; },
+  };
+  const packet = new Uint8Array(8 + 240 * 4);
+  const view = new DataView(packet.buffer); view.setUint32(0, 24000, true); view.setUint32(4, 240, true);
+  const abort = new AbortController();
+  const body = new ReadableStream<Uint8Array>({ start(controller) { release = controller; controller.enqueue(packet); } });
+  const task = playAgentSpeech({ generation_id: 'next-piece', stream_audio: true }, 'http://fixture', abort.signal,
+    (elapsed, buffering) => progress.push({ elapsed, buffering }), {
+      context: context as unknown as AudioContext, resume: false, initialBufferSeconds: .04,
+      fetch: (async () => new Response(body)) as typeof fetch,
+    });
+  const settled = task.catch(error => error);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  expect(starts).toEqual([10.04]);
+  context.currentTime = 10.045;
+  await new Promise(resolve => setTimeout(resolve, 110));
+  expect(progress.at(-1)?.buffering).toBe(false);
+  context.currentTime = 11;
+  await new Promise(resolve => setTimeout(resolve, 110));
+  expect(progress.at(-1)?.buffering).toBe(true);
+  expect(progress.at(-1)?.elapsed).toBeCloseTo(10);
+  abort.abort(); await settled;
+  // Keep the source referenced until cancellation has settled.
+  expect(release!).toBeDefined();
+});

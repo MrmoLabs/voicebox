@@ -103,6 +103,7 @@ class GenerationRequest(BaseModel):
     )
     normalize: bool = Field(default=True, description="Normalize output audio volume")
     stream_audio: bool = Field(default=False, description="Enable incremental PCM preview for CUDA Qwen Base")
+    preview_mode: Literal["realtime", "checked"] = "realtime"
     effects_chain: Optional[List["EffectConfig"]] = Field(
         None, description="Effects chain to apply after generation (overrides profile default)"
     )
@@ -408,6 +409,7 @@ class SpeakRequest(BaseModel):
     )
     model_size: Optional[str] = Field(None, pattern="^(1\\.7B|0\\.6B|1B|3B)$")
     stream_audio: bool = False
+    preview_mode: Literal["realtime", "checked"] = "realtime"
     playback_owner: Literal["voicebox", "client"] = "voicebox"
     session_id: Optional[str] = Field(None, min_length=1, max_length=200)
     request_id: Optional[str] = Field(None, min_length=1, max_length=200)

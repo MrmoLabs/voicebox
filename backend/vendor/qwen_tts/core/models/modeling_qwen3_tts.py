@@ -29,6 +29,7 @@ from torch.nn import functional as F
 from transformers.activations import ACT2FN
 from transformers.cache_utils import Cache, DynamicCache
 from transformers.generation import GenerationMixin
+from transformers.generation.logits_process import RepetitionPenaltyLogitsProcessor
 from transformers.integrations import use_kernel_forward_from_hub
 from transformers.masking_utils import (create_causal_mask,
                                         create_sliding_window_causal_mask)
@@ -2625,6 +2626,7 @@ class Qwen3TTSForConditionalGeneration(Qwen3TTSPreTrainedModel, GenerationMixin)
         top_k: int = 50,
         top_p: float = 1.0,
         temperature: float = 0.9,
+        repetition_penalty: float = 1.05,
         # Sub-talker parameters (for remaining code groups)
         subtalker_dosample: bool = True,
         subtalker_top_k: int = 50,
@@ -2653,6 +2655,7 @@ class Qwen3TTSForConditionalGeneration(Qwen3TTSPreTrainedModel, GenerationMixin)
             top_k: Top-k filtering for sampling
             top_p: Top-p (nucleus) filtering for sampling
             temperature: Sampling temperature
+            repetition_penalty: Penalty for previously generated first-codebook tokens
             subtalker_*: Parameters for sub-codebook prediction
             emit_every_frames: Emit PCM chunk every N codec frames
             decode_window_frames: Window size for decoding (longer = better quality, more latency)
@@ -2663,6 +2666,10 @@ class Qwen3TTSForConditionalGeneration(Qwen3TTSPreTrainedModel, GenerationMixin)
         Yields:
             tuple[np.ndarray, int]: (pcm_chunk as float32 array, sample_rate)
         """
+        if max_frames <= 0:
+            raise ValueError("max_frames must be positive")
+        repetition_processor = RepetitionPenaltyLogitsProcessor(repetition_penalty)
+
         # Build talker inputs
         talker_input_embeds, talker_attention_mask, trailing_text_hiddens, tts_pad_embed = \
             self._build_talker_inputs(
@@ -2713,10 +2720,9 @@ class Qwen3TTSForConditionalGeneration(Qwen3TTSPreTrainedModel, GenerationMixin)
 
         # Sample first token from prefill logits
         last_logits = out.logits[:, -1, :]
-        if do_sample:
-            token = _sample_next_token(last_logits, temperature, top_k, top_p, suppress_tokens)
-        else:
-            token = torch.argmax(last_logits, dim=-1)
+        token = _sample_next_token(
+            last_logits, temperature if do_sample else 0.0, top_k, top_p, suppress_tokens
+        )
         # Debug removed for performance: first token sampled
 
         # Extract ref_code for decoder context (if in ICL mode)
@@ -2736,8 +2742,15 @@ class Qwen3TTSForConditionalGeneration(Qwen3TTSPreTrainedModel, GenerationMixin)
         decoded_tail: Optional[np.ndarray] = None
         frames_since_emit = 0
         total_frames_emitted = 0  # Track how many frames we've already emitted audio for
+        # Keep the same repetition control as GenerationMixin.generate(). Only the
+        # first codebook predicts the next frame; other codebooks are not history.
+        token_history = torch.empty((1, max_frames), dtype=torch.long, device=token.device)
 
-        for step_idx in range(max_frames):
+        for step_idx in range(max_frames + 1):
+            if token[0] == eos_id:
+                break
+            if step_idx == max_frames:
+                raise RuntimeError("Streaming TTS exceeded its frame limit without an end token")
             # Mark step begin for CUDA graphs to avoid tensor overwrite errors
             # This is required when using torch.compile with reduce-overhead mode
             torch.compiler.cudagraph_mark_step_begin()
@@ -2774,13 +2787,14 @@ class Qwen3TTSForConditionalGeneration(Qwen3TTSPreTrainedModel, GenerationMixin)
 
             # Keep on GPU to avoid CPU<->GPU transfers during decode
             codes_buffer.append(codec_ids[0].detach())
+            token_history[:, step_idx] = codec_ids[:, 0]
 
             # Sample next token for first codebook
             step_logits = step_out.logits[:, -1, :]
-            if do_sample:
-                token = _sample_next_token(step_logits, temperature, top_k, top_p, suppress_tokens)
-            else:
-                token = torch.argmax(step_logits, dim=-1)
+            step_logits = repetition_processor(token_history[:, :step_idx + 1], step_logits)
+            token = _sample_next_token(
+                step_logits, temperature if do_sample else 0.0, top_k, top_p, suppress_tokens
+            )
 
             frames_since_emit += 1
             if frames_since_emit < emit_every_frames:

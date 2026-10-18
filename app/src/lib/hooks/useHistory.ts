@@ -1,12 +1,14 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '@/lib/api/client';
-import type { GenerationExportFormat, HistoryQuery } from '@/lib/api/types';
+import type { GenerationExportFormat, GenerationResponse, HistoryQuery } from '@/lib/api/types';
+import { generationSnapshots, isActiveGeneration } from '@/lib/utils/history';
 import { usePlatform } from '@/platform/PlatformContext';
 
 export function useHistory(query?: HistoryQuery) {
   return useQuery({
     queryKey: ['history', query],
     queryFn: () => apiClient.listHistory(query),
+    staleTime: 0,
   });
 }
 
@@ -15,6 +17,22 @@ export function useGenerationDetail(generationId: string) {
     queryKey: ['history', generationId],
     queryFn: () => apiClient.getGeneration(generationId),
     enabled: !!generationId,
+  });
+}
+
+// REST/MCP jobs may never enter the local pending-generation store. Reconcile
+// every active history row by ID, including rows on previously loaded pages.
+export function useActiveGenerationSnapshots(ids: string[]) {
+  return useQueries({
+    queries: ids.map((id) => ({
+      queryKey: ['history', id],
+      queryFn: () => apiClient.getGeneration(id),
+      staleTime: 0,
+      refetchInterval: (query: { state: { data: GenerationResponse | undefined } }) =>
+        !query.state.data || isActiveGeneration(query.state.data) ? 2000 : false,
+      refetchIntervalInBackground: true,
+    })),
+    combine: generationSnapshots,
   });
 }
 

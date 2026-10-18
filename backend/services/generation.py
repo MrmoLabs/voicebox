@@ -61,6 +61,7 @@ async def run_generation(
     crossfade_ms: Optional[int] = None,
     version_id: Optional[str] = None,
     stream_audio: bool = False,
+    preview_mode: Literal["realtime", "checked"] = "realtime",
 ) -> None:
     """Execute TTS inference and persist the result.
 
@@ -137,6 +138,7 @@ async def run_generation(
                 tts_model, generation_id, text, voice_prompt, language=language,
                 seed=seed, instruct=instruct, crossfade_ms=crossfade_ms if crossfade_ms is not None else 50,
                 max_chunk_chars=min(max_chunk_chars or 160, 160),
+                preview_mode=preview_mode,
             )
         else:
             audio, sample_rate = await generate_chunked(tts_model, text, voice_prompt, **gen_kwargs)

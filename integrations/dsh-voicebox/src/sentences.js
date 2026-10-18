@@ -33,6 +33,7 @@ function stableText(raw, final) {
       const ticks = text.slice(i).match(/^`+/)[0];
       const end = text.indexOf(ticks, i + ticks.length);
       if (end < 0) break;
+      plain += text.slice(i + ticks.length, end);
       i = end + ticks.length; continue;
     }
     const image = text.startsWith('![', i);
@@ -70,13 +71,13 @@ export class SentenceBuffer {
     while (remaining.trim()) {
       let end = 0;
       // Wait for whitespace after an English period, avoiding split decimals.
-      const boundaries = [...remaining.matchAll(/[。！？!?；;][”’」』）)]*|\.(?=\s)/gu)];
-      const boundary = boundaries.find(match => match.index + match[0].length >= 24);
-      if (boundary && boundary.index + boundary[0].length <= 180) end = boundary.index + boundary[0].length;
-      else if (remaining.length >= 180) {
-        const prefix = remaining.slice(0, 180);
+      const boundaries = [...remaining.matchAll(/[。！？!?；;][”’」』）)]*|\.(?=\s)|[，：]|[,:](?!\d)/gu)];
+      const boundary = boundaries.find(match => match.index + match[0].length >= (/^[，：,:]/u.test(match[0]) ? 20 : 24));
+      if (boundary && boundary.index + boundary[0].length <= 80) end = boundary.index + boundary[0].length;
+      else if (remaining.length >= 80) {
+        const prefix = remaining.slice(0, 80);
         end = Math.max(prefix.lastIndexOf(' '), prefix.lastIndexOf('，'), prefix.lastIndexOf(','));
-        if (end < 80) end = 180;
+        if (end < 24) end = 80;
         if (/[\uD800-\uDBFF]/.test(remaining[end - 1])) end--;
       } else if (final) end = remaining.length;
       if (!end) break;
@@ -92,24 +93,35 @@ export class SentenceBuffer {
 
 /** One playing job + one prepared job; at most eight bounded text batches. */
 export class SentenceQueue {
-  constructor({ prepare, play, waiting, drained, error }) {
-    Object.assign(this, { prepare, play, waiting, drained, error });
+  constructor({ prepare, play, waiting, drained, error, longForm = false, queued, playing, played }) {
+    Object.assign(this, { prepare, play, waiting, drained, error, longForm, queued, playing, played });
     this.pending = []; this.closed = false; this.cancelled = false; this.characters = 0;
   }
-  enqueue(text, id) {
+  enqueue(text, id, meta = {}) {
     if (this.cancelled || this.closed || !text) return;
-    const coalesce = this.pending.length >= 8;
+    const coalesce = !this.longForm && this.pending.length >= 8;
     this.characters += text.length + Number(coalesce);
-    if (this.characters > 10_000) throw new Error('本轮朗读超过 10000 字符，已停止自动播报');
+    if (this.characters > (this.longForm ? 200_000 : 10_000)) throw new Error('本次朗读达到文本保护上限，尚未完整播放');
     if (coalesce) this.pending.at(-1).text += `\n${text}`;
-    else this.pending.push({ text, id });
+    else { const item = { text, id, ...meta }; this.pending.push(item); this.queued?.(item); }
     this.prime(); this.run();
   }
   prime() {
     if (this.next || !this.pending.length || this.cancelled) return;
-    const item = this.pending.shift();
+    let item = this.pending.shift();
+    if (this.longForm) {
+      const parts = [item];
+      // Only combine text already waiting, within one durable model step.
+      // First sound never waits for a larger batch; synthesis stays <=80 chars.
+      while (this.pending.length && this.pending[0].turn === item.turn && this.pending[0].step === item.step
+        && item.text.length + 1 + this.pending[0].text.length <= 80) {
+        const next = this.pending.shift(); parts.push(next);
+        item = { ...item, text: `${item.text} ${next.text}` };
+      }
+      if (parts.length > 1) item.parts = parts;
+    }
     // Capture failures immediately, including while the previous audio plays.
-    this.next = Promise.resolve().then(() => this.prepare(item)).then(value => ({ value }), error => ({ error }));
+    this.next = Promise.resolve().then(() => this.prepare(item)).then(value => ({ value, item }), error => ({ error }));
   }
   run() {
     if (this.runner || this.cancelled) return;
@@ -122,7 +134,9 @@ export class SentenceQueue {
           if (result.error) throw result.error;
           if (!result.value) { this.cancel(); return; }
           this.prime();
+          this.playing?.(result.item);
           await this.play(result.value);
+          if (!this.cancelled) this.played?.(result.item);
         }
       } catch (error) {
         if (!this.cancelled) { this.cancel(); this.error(error); }
