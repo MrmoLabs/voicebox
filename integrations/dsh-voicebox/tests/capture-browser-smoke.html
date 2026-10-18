@@ -2,6 +2,8 @@
 <style>body{max-width:850px;margin:48px auto;padding:0 24px;font:16px/1.6 system-ui}button{padding:10px 18px}pre{white-space:pre-wrap}</style>
 <h1>录入生命周期验收</h1><p>使用真实浏览器音频 API 与静默合成流。不会开启物理麦克风、请求权限或生成可听声音。断开由测试事件模拟，不代表已完成物理设备拔插验收。</p>
 <button id="run">运行四项检查</button><pre id="result">尚未运行</pre>
+<h2>播放故障检查</h2><p>此组须使用 Bun 启动验收服务。只播放全零 PCM，验证上下文关闭、暂停恢复及异常清理。</p>
+<button id="playback">运行四项播放检查</button><pre id="playback-result">尚未运行</pre>
 <script type="module">
 import { openMicrophone } from '/capture.js';
 const assert = (value, message) => { if (!value) throw Error(message); };
@@ -64,8 +66,8 @@ async function scenario(mode) {
     window.AudioContext = NativeContext; window.AudioWorkletNode = NativeWorklet; navigator.mediaDevices.getUserMedia = originalGetUserMedia;
   }
 }
-document.querySelector('#run').onclick = async event => {
-  event.currentTarget.disabled = true;
+document.querySelector('#run').onclick = async () => {
+  document.querySelectorAll('button').forEach(button => { button.disabled = true; });
   const report = { browser:navigator.userAgent, scope:'Native browser AudioContext/AudioWorklet/MediaStream with silent synthetic input; disconnect and CSP failures injected; no hardware permission, physical unplug, ASR or LLM', results:[] };
   try {
     for (const mode of ['normal-close', 'initialization-disconnect', 'processor-error', 'fallback-close']) {
@@ -77,5 +79,45 @@ document.querySelector('#run').onclick = async event => {
   const saved = await fetch('/result', {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(report)});
   report.saved = saved.ok;
   document.querySelector('#result').textContent = JSON.stringify(report, null, 2);
+  document.querySelectorAll('button').forEach(button => { button.disabled = false; });
+};
+document.querySelector('#playback').onclick = async () => {
+  document.querySelectorAll('button').forEach(button => { button.disabled = true; });
+  const report = { browser:navigator.userAgent, scope:'Native AudioContext with silent zero PCM; context closure and malformed data injected; no physical device disconnect, network outage or LLM', results:[] };
+  try {
+    const { playAgentSpeech } = await import('/playback.js');
+    for (const mode of ['close-during-read', 'close-during-drain', 'pause-resume', 'decode-stuck-cancel']) {
+      document.querySelector('#playback-result').textContent = `正在检查：${mode}`;
+      const context = new NativeContext(), abort = new AbortController(), trace = [];
+      let ended = false, cancelled = 0;
+      try {
+        await context.resume();
+        const pcm = new Uint8Array(8 + 1200 * 4 + 8), header = new DataView(pcm.buffer);
+        header.setUint32(0,24000,true); header.setUint32(4,1200,true);
+        const body = new ReadableStream({ start(controller) {
+          controller.enqueue(mode === 'decode-stuck-cancel' ? new Uint8Array([1,0,0,0,1,0,0,0,0,0,0,0]) : mode === 'close-during-read' ? pcm.slice(0,-8) : pcm);
+          if (!['close-during-read','decode-stuck-cancel'].includes(mode)) controller.close();
+        }, cancel() { cancelled++; return mode === 'decode-stuck-cancel' ? new Promise(()=>{}) : undefined; } });
+        const task = playAgentSpeech({generation_id:'browser-fixture',stream_audio:true}, location.origin, abort.signal, ()=>{},
+          {context,resume:false,initialBufferSeconds:mode === 'pause-resume' ? .04 : .8,fetch:async()=>new Response(body),trace:event=>trace.push(event)})
+          .then(()=>({completed:true}),error=>({error:error.message})).finally(()=>{ended=true;});
+        if (mode !== 'decode-stuck-cancel') {
+          await until(()=>trace.some(event=>event.kind==='first'));
+          if (mode === 'pause-resume') {
+            await context.suspend(); await sleep(100); assert(!ended,'Normal pause must preserve pending playback'); await context.resume();
+          } else await context.close();
+        }
+        await until(()=>ended); const outcome = await task;
+        assert(mode === 'pause-resume' ? outcome.completed : outcome.error?.includes(mode === 'decode-stuck-cancel' ? 'Invalid PCM' : 'audio context closed'), 'Unexpected playback outcome');
+        assert(trace.some(event=>event.kind==='completed') === (mode === 'pause-resume'), 'Failed playback must not report completion');
+        if (mode === 'decode-stuck-cancel') assert(cancelled===1,'The malformed stream must be cancelled once');
+        report.results.push({mode,passed:true,completed:!!outcome.completed,cancelled,terminal:trace.at(-1)?.kind});
+      } finally { abort.abort(); if(context.state!=='closed') await context.close(); }
+    }
+    report.passed = true;
+  } catch(error) { report.passed=false; report.error=error.message; }
+  const saved = await fetch('/playback-result',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(report)});
+  report.saved=saved.ok; document.querySelector('#playback-result').textContent=JSON.stringify(report,null,2);
+  document.querySelectorAll('button').forEach(button=>{button.disabled=false;});
 };
 </script></html>

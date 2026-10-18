@@ -159,9 +159,12 @@ export class DesktopSpeechController {
       if (binding.session.getSnapshot().pendingSubmissions.length) this.stop();
     });
   }
+  ensureAudio() {
+    if (!this.audio || this.audio.state === 'closed') { this.audio = new AudioContext(); this.audioUnlocked = false; }
+    return this.audio;
+  }
   unlock() {
-    this.audio ??= new AudioContext();
-    const context = this.audio;
+    const context = this.ensureAudio();
     return context.resume().then(() => { if (this.audio === context) this.audioUnlocked = true; });
   }
   toggle() {
@@ -207,7 +210,7 @@ export class DesktopSpeechController {
     this.hasPlaybackProgress = false;
     this.update({ phase: this.playbackPaused() ? 'paused' : 'buffering', waitingForText: false, playbackText: generation.text || '' });
     try {
-      this.audio ??= new AudioContext();
+      this.ensureAudio();
       // A paused reply suspends the shared context. The next reply starts
       // afresh after prior nodes have been stopped, using the existing grant.
       await this.syncPlaybackPause();
@@ -272,7 +275,7 @@ export class DesktopSpeechController {
     this.conversation?.dispose();
     this.stop(); this.offEvents?.(); this.offSession?.(); this.offSettings?.();
     await this.bridge.dispose();
-    await this.audio?.close();
+    if (this.audio && this.audio.state !== 'closed') await this.audio.close();
     this.listeners.clear();
     this.diagnostics.dispose();
   }

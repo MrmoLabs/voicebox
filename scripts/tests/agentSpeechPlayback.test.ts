@@ -117,3 +117,47 @@ test('a suspended audio clock is not a PCM underrun and EOF draining does not in
     expect(trace.map(event => event.kind)).toEqual(['first', 'started', 'completed']);
   } finally { abort.abort(); await task.catch(() => {}); }
 });
+
+test('an unexpectedly closed audio context rejects during resume, PCM read and playback drain', async () => {
+  for (const stage of ['resume', 'read', 'drain']) {
+    let releaseResume = () => {}, stopped = 0, disconnected = 0;
+    const trace: SpeechPlaybackTrace[] = [];
+    class Context extends EventTarget {
+      state = 'running'; currentTime = 10; destination = {};
+      resume() { return new Promise<void>(resolve => { releaseResume = resolve; }); }
+      createBuffer(_channels: number, count: number, rate: number) { return { duration: count / rate, getChannelData: () => new Float32Array(count) }; }
+      createBufferSource() { return { connect() {}, disconnect() { disconnected++; }, start() {}, stop() { stopped++; } }; }
+    }
+    const context = new Context(), abort = new AbortController();
+    const pcm = new Uint8Array(8 + 240 * 4 + 8), view = new DataView(pcm.buffer);
+    view.setUint32(0, 24000, true); view.setUint32(4, 240, true);
+    const task = playAgentSpeech({ generation_id: stage, stream_audio: true }, 'http://fixture', abort.signal, () => {}, {
+      context: context as unknown as AudioContext, resume: stage === 'resume',
+      fetch: (async () => stage === 'read' ? new Response(new ReadableStream()) : new Response(pcm)) as typeof fetch,
+      trace: event => trace.push(event),
+    }).catch(error => error);
+    try {
+      await new Promise(resolve => setTimeout(resolve, 20));
+      context.state = 'closed'; context.dispatchEvent(new Event('statechange'));
+      const outcome = await Promise.race([task, new Promise(resolve => setTimeout(() => resolve('hung'), 100))]);
+      expect(outcome).toBeInstanceOf(Error); expect((outcome as Error).message).toContain('audio context closed');
+      expect(trace.at(-1)).toMatchObject({ kind: 'failed' });
+      expect(trace.some(event => event.kind === 'completed')).toBe(false);
+      if (stage === 'drain') { expect(stopped).toBe(1); expect(disconnected).toBe(1); }
+    } finally { releaseResume(); abort.abort(); await task; }
+  }
+});
+
+test('a decoding failure is not held hostage by an underlying stream whose cancellation never settles', async () => {
+  let cancelled = 0;
+  const context = { state: 'running', currentTime: 0, destination: {} } as AudioContext;
+  const body = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new Uint8Array([1,0,0,0,1,0,0,0,0,0,0,0])); }, cancel() { cancelled++; return new Promise(() => {}); } });
+  const abort = new AbortController();
+  const task = playAgentSpeech({ generation_id: 'stuck-cancel', stream_audio: true }, 'http://fixture', abort.signal, () => {}, {
+    context, resume: false, fetch: (async () => new Response(body)) as typeof fetch,
+  }).catch(error => error);
+  const outcome = await Promise.race([task, new Promise(resolve => setTimeout(() => resolve('hung'), 100))]);
+  abort.abort();
+  expect(outcome).toBeInstanceOf(Error); expect((outcome as Error).message).toContain('Invalid PCM');
+  expect(cancelled).toBe(1);
+});

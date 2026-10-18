@@ -11,6 +11,22 @@ const end = event('turn/end', { turn: 1, reason: { kind: 'completed' } }, 4);
 const snapshot = (revision, entries, kind = 'append') => ({ revision, entries, change: { kind, entries } });
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 
+test('an explicit playback unlock replaces a closed context and preserves a suspended live one', async t => {
+  const previous = globalThis.AudioContext; let created = 0;
+  t.after(() => { if (previous === undefined) delete globalThis.AudioContext; else globalThis.AudioContext = previous; });
+  globalThis.AudioContext = class {
+    state = 'suspended';
+    constructor() { created++; }
+    async resume() { if (this.state === 'closed') throw Error('Cannot resume closed context'); this.state = 'running'; }
+    async close() { this.state = 'closed'; }
+  };
+  const controller = new DesktopSpeechController({}, async () => {}); t.after(() => controller.dispose());
+  await controller.unlock(); const first = controller.audio;
+  first.state = 'suspended'; await controller.unlock(); assert.equal(controller.audio, first); assert.equal(created, 1);
+  first.state = 'closed'; await controller.unlock();
+  assert.notEqual(controller.audio, first); assert.equal(created, 2); assert.equal(controller.audioUnlocked, true);
+});
+
 test('input pause leases span PCM pieces, preserve user pause and cannot resume a replacement reply', async t => {
   const previous = globalThis.AudioContext;
   t.after(() => { if (previous === undefined) delete globalThis.AudioContext; else globalThis.AudioContext = previous; });
