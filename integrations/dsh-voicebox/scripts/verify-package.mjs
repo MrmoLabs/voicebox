@@ -56,6 +56,9 @@ for (const [index, label] of [[0, 'install-baseline'], [1, 'upgrade-candidate'],
 }
 const digests = {};
 for (const archive of archives) digests[path.basename(archive)] = createHash('sha256').update(await readFile(archive)).digest('hex');
-await writeFile(path.join(output, 'verification.json'), `${JSON.stringify({ baseline, isolated, stages, sha256: digests,
+const candidateHash = digests[path.basename(archives[1])];
+const candidate = { file: `${next.name}-${next.version}-${candidateHash.slice(0, 12)}.tgz`, sha256: candidateHash };
+await copyFile(archives[1], path.join(output, candidate.file));
+await writeFile(path.join(output, 'verification.json'), `${JSON.stringify({ baseline, isolated, stages, candidate, sha256: digests,
   scope: 'Fresh dependency root; packaged host/client imports and version changes. No native Desktop installer, inference or hardware audio.' }, null, 2)}\n`, 'utf8');
-console.log(JSON.stringify({ output, isolated, stages, sha256: digests }, null, 2));
+console.log(JSON.stringify({ output, isolated, stages, candidate, sha256: digests }, null, 2));
