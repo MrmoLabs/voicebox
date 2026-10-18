@@ -17,7 +17,7 @@ const runtime = path.join(desktop, 'resources/app.asar/dsh');
 const cli = path.join(runtime, 'node_modules/@deepseek-ai/dsh-desktop-host/lib/cli.js');
 const env = { ...process.env, DSH_HOME: home, ELECTRON_RUN_AS_NODE: '1', npm_config_store_dir: path.join(home, 'store') };
 function run(args) {
-  const result = spawnSync(executable, ['--expose-internals', ...args], { env, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024, windowsHide: true });
+  const result = spawnSync(executable, ['--expose-internals', ...args], { env, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024, windowsHide: true, timeout: 120_000 });
   if (result.error || result.status !== 0) throw new Error(`${args.join(' ')} failed\n${result.error || ''}\n${result.stdout}\n${result.stderr}`);
   return result.stdout.trim();
 }
@@ -41,7 +41,9 @@ for (const [stage, version] of [['install-baseline', '0.1.0'], ['upgrade-candida
   assert.match(smoke, /^PASS:/);
   stages.push({ stage, version, composed: true, hostSmoke: smoke });
 }
-const evidence = { runtimeVersion, home, stages,
-  scope: 'Official Desktop CLI + pnpm + profile composition + packaged plugin against installed Cordis/Connection/SessionStore. Uses shipped Web profile; no native Desktop window, credentials, models or microphone.' };
+const sourceDialogue = run([path.join(root, 'integrations/dsh-voicebox/tests/dialogue-host-smoke.mjs'), runtime]);
+assert.match(sourceDialogue, /^PASS:/);
+const evidence = { runtimeVersion, home, stages, sourceDialogue,
+  scope: 'Official Desktop CLI + pnpm + profile composition + packaged plugin against installed Cordis/Connection/SessionStore. Source VoiceContext against installed AgentLoop with scripted models. Uses shipped Web profile; no native Desktop window, credentials, models or microphone.' };
 await writeFile(path.join(output, 'dsh-install-verification.json'), JSON.stringify(evidence, null, 2) + '\n', 'utf8');
 console.log(JSON.stringify(evidence, null, 2));

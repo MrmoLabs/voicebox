@@ -1,6 +1,6 @@
 # DSH Voicebox 预览版安装与回退
 
-当前候选：`0.2.0-beta.1`。这是开发候选包，尚未发布到 npm 或 GitHub Release。
+当前候选：`0.2.0-beta.2`。这是开发候选包，尚未发布到 npm 或 GitHub Release。
 
 ## 支持条件
 
@@ -15,8 +15,10 @@
 1. 启动配套 Voicebox，并准备模型和声音档案。
 2. 使用 DSH 的插件安装入口，或其官方命令安装候选包：
 
+   使用 CLI 时，先至少启动一次 Desktop 完成 profile 初始化，再完全退出 Desktop 后执行；应用内安装入口遵循界面提示。
+
    ```powershell
-   dsh plugin --profile desktop add ./dsh-voicebox-0.2.0-beta.1.tgz
+   dsh plugin --profile desktop add ./dsh-voicebox-0.2.0-beta.2.tgz
    ```
 
 3. 按 DSH 提示重新加载。在插件配置中填写服务地址、选择声音档案；其他参数可以保留默认值。
@@ -54,3 +56,5 @@ bun run verify:dsh
 ```
 
 它在仓库 `.tmp-dsh-package-*` 目录建立独立 `DSH_HOME`，通过官方 CLI / pnpm 安装、升级与回退；每一步核对配置组合，并使用该已安装版本的真实 Cordis / Connection / SessionStore 测试打包插件。使用随附的 Web profile 模板，不启动或退出正在使用的 Desktop，不复用用户凭据与会话；因此仍不能代替原生窗口首次安装验收。结果保存在 `dsh-install-verification.json`。
+
+同一脚本还使用当前源码的 VoiceContext，在已安装的真实 AgentLoop 中执行脚本模型续讲验收；不调用远程模型，不把“已解释”当成“已听完”。原生 Desktop 的全新 profile 仍需要用户完成它自己的首次认证引导，插件不会复制其他 profile 的凭据。

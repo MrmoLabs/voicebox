@@ -2,6 +2,7 @@ import { UtteranceDetector, audioBase64, openMicrophone } from './capture.js';
 import { VOICE_DEFAULTS, SILENCE_MS } from './voice-config.js';
 import { isPlaybackEcho } from './echo.js';
 import { voiceIntent } from './content.js';
+import { diagnosticNow } from './telemetry.js';
 
 export { VOICE_DEFAULTS } from './voice-config.js';
 
@@ -15,6 +16,11 @@ export class VoiceConversation {
     this.onVisibility = () => {
       if (!this.state.active) return;
       const blocked = this.backgroundBlocked();
+      const visibility = `${globalThis.document?.hidden}:${globalThis.document?.hasFocus?.()}`;
+      if (visibility !== this.lastVisibility) {
+        this.lastVisibility = visibility;
+        this.speaker.trace?.('window.state', { hidden: globalThis.document?.hidden, focused: globalThis.document?.hasFocus?.() });
+      }
       if (blocked && this.state.phase === 'capturing') this.discardInput();
       this.microphone?.setMuted?.(this.state.muted || blocked);
       this.refresh();
@@ -26,7 +32,10 @@ export class VoiceConversation {
   }
   getSnapshot = () => this.state;
   subscribe = fn => { this.listeners.add(fn); return () => this.listeners.delete(fn); };
-  update(value) { this.state = { ...this.state, ...value }; for (const fn of this.listeners) fn(); }
+  update(value) {
+    if (value.phase && value.phase !== this.state.phase) this.speaker.trace?.('input.state', { state: value.phase });
+    this.state = { ...this.state, ...value }; for (const fn of this.listeners) fn();
+  }
   settings() { return { ...VOICE_DEFAULTS, ...this.form?.getSnapshot().value }; }
   backgroundBlocked() { return !this.settings().backgroundListening && !!(globalThis.document?.hidden || globalThis.document?.hasFocus?.() === false); }
   busy() {
@@ -65,6 +74,7 @@ export class VoiceConversation {
     if (this.candidate || !this.busy()) return;
     const candidate = { heard: this.heard(), reference: this.speaker.state.phase === 'playing' ? this.speaker.state.playbackText : '' };
     this.candidate = candidate;
+    this.speaker.trace?.('input.candidate');
     candidate.hold = this.speaker.holdPlayback();
   }
   releaseCandidate() {
@@ -72,6 +82,7 @@ export class VoiceConversation {
     candidate?.hold?.release();
   }
   discardInput() {
+    this.speaker.trace?.('input.discarded');
     this.input?.abort.abort(); this.input = undefined;
     this.detector?.reset(); this.releaseCandidate();
     this.update({ phase: 'listening', confirming: false });
@@ -97,6 +108,7 @@ export class VoiceConversation {
     const allowed = this.settings().sessionIds;
     if (allowed?.length && !allowed.includes(id)) { this.update({ error: '当前会话不在 Voicebox 白名单中' }); return; }
     const abort = new AbortController(); this.abort = abort; this.session = session; this.id = id;
+    this.speaker.trace?.('call.start'); this.lastVisibility = undefined;
     this.update({ active: true, phase: 'starting', transcript: '', error: '', notice: '', confirming: false, muted: false, heard: undefined });
     // Resume playback directly from this user gesture before awaiting network I/O.
     const unlock = this.speaker.unlock();
@@ -185,6 +197,9 @@ export class VoiceConversation {
     const abort = this.abort, session = this.session;
     if (!this.state.active || abort.signal.aborted || this.state.phase === 'transcribing' || this.state.phase === 'sending') return;
     const input = { abort: new AbortController(), candidate: this.candidate };
+    this.inputSequence = (this.inputSequence || 0) + 1;
+    const started = diagnosticNow(), operation = this.inputSequence;
+    this.speaker.trace?.('input.asr-start', { input: operation, bytes: bytes.length });
     this.input = input;
     const signal = AbortSignal.any([abort.signal, input.abort.signal, AbortSignal.timeout(90_000)]);
     const recognitionSignal = input.candidate ? AbortSignal.any([signal, AbortSignal.timeout(15_000)]) : signal;
@@ -201,10 +216,12 @@ export class VoiceConversation {
       recognitionSignal.throwIfAborted();
       if (typeof data.text !== 'string' || data.text.length > 10000) throw new Error('语音识别返回了无效文字');
       const text = data.text.trim();
+      this.speaker.trace?.('input.asr-ready', { input: operation, durationMs: diagnosticNow() - started });
       if (input.candidate && !input.candidate.hold.isCurrent()) {
         this.releaseCandidate(); this.update({ phase: 'listening', notice: '回答已变更，本段插话未发送', confirming: false }); this.refresh(); return;
       }
       if (!text || (input.candidate && isPlaybackEcho(text, input.candidate.reference))) {
+        this.speaker.trace?.(text ? 'input.echo' : 'input.empty', { input: operation });
         this.releaseCandidate();
         this.update({ phase: 'listening', confirming: false, notice: input.candidate ? (text ? '已忽略疑似播报回声，保留原回答' : '未识别到新内容，保留原回答') : '' });
         this.refresh(); return;
@@ -212,6 +229,7 @@ export class VoiceConversation {
       const playback = this.speaker.delivery?.snapshot();
       const reference = playback?.current || playback?.recent || this.speaker.state.playbackText || '';
       const intent = voiceIntent(text, { busy: this.busy(), paused: this.speaker.userPaused === true, awaitingAnswer: /[？?]\s*$|(?:吗|呢)[。！]?\s*$/u.test(reference) });
+      this.speaker.trace?.('input.intent', { input: operation, state: intent.kind });
       if (intent.kind !== 'question' && (intent.kind !== 'resume' || this.speaker.userPaused)) {
         this.releaseCandidate();
         if (intent.kind === 'stop') {
@@ -237,15 +255,19 @@ export class VoiceConversation {
       await this.syncContext();
       signal.throwIfAborted();
       const submission = session.beginSubmission({ text, mode, attachments: [] });
+      const submitting = diagnosticNow();
+      this.speaker.trace?.('input.submit', { input: operation });
       try {
         const result = await session.prompt([{ type: 'text', text }], mode, signal, submission.requestId);
         if (!result.ok) throw new Error(result.error?.message || 'DSH 未接受语音消息');
+        this.speaker.trace?.('input.accepted', { input: operation, durationMs: diagnosticNow() - submitting });
       } catch (error) { submission.abandon(); throw error; }
       abort.signal.throwIfAborted();
       this.interrupted = false; this.manualFloor = false; this.detector?.reset();
       this.update({ phase: 'listening', confirming: false }); this.refresh();
     } catch (error) {
       if (this.input !== input || abort.signal.aborted || input.abort.signal.aborted) return;
+      this.speaker.trace?.(this.state.phase === 'transcribing' ? 'input.asr-failed' : 'input.failed', { input: operation, durationMs: diagnosticNow() - started });
       if (input.candidate && !input.committed) {
         this.releaseCandidate(); this.update({ phase: 'listening', confirming: false, notice: '插话未发送，保留原回答', error: error.message || String(error) }); this.refresh();
       } else this.fail(error, abort);
@@ -264,6 +286,7 @@ export class VoiceConversation {
   }
   end() {
     const active = this.state.active;
+    if (active) this.speaker.trace?.('call.end');
     clearInterval(this.contextHeartbeat); this.contextHeartbeat = undefined;
     void this.syncContext('end').catch(() => {}); this.contextEpoch = undefined;
     this.abort?.abort(); this.microphone?.close(); this.microphone = undefined;

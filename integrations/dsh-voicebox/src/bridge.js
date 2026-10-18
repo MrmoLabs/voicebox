@@ -1,4 +1,5 @@
 import { supportsSpeech } from './diagnostics.js';
+import { diagnosticNow } from './telemetry.js';
 
 /** Convert already-selected assistant text, never reasoning/tool blocks. */
 export function spokenText(text) {
@@ -23,7 +24,7 @@ export function spokenText(text) {
 }
 
 export class SpeechBridge {
-  constructor(config = {}, { fetch: fetcher = globalThis.fetch, warn = console.warn, onSpeech, onInterrupt, onPreparing } = {}) {
+  constructor(config = {}, { fetch: fetcher = globalThis.fetch, warn = console.warn, onSpeech, onInterrupt, onPreparing, trace } = {}) {
     const endpoint = new URL(config.endpoint || 'http://127.0.0.1:17493');
     if (!['http:', 'https:'].includes(endpoint.protocol) || endpoint.username || endpoint.password) {
       throw new Error('Voicebox endpoint must be an HTTP(S) URL without credentials');
@@ -43,6 +44,8 @@ export class SpeechBridge {
     this.active = undefined;
     this.disposed = false;
     this.capabilities = undefined;
+    this.traceSequence = 0;
+    this.trace = (event, values) => { try { trace?.(event, values); } catch { /* Diagnostics cannot interrupt speech. */ } };
   }
 
   handle(session, event) {
@@ -110,7 +113,13 @@ export class SpeechBridge {
   }
 
   post(path, body) {
-    return this.request(path, { method: 'POST', body: JSON.stringify(body) });
+    const started = diagnosticNow();
+    if (path === '/speak/cancel') this.trace('speech.cancel');
+    const pending = this.request(path, { method: 'POST', body: JSON.stringify(body) });
+    if (path !== '/speak/cancel') return pending;
+    return pending.then(value => {
+      this.trace('speech.cancelled', { durationMs: diagnosticNow() - started }); return value;
+    }, error => { this.trace('speech.cancel-failed', { durationMs: diagnosticNow() - started }); throw error; });
   }
 
   async checkCapabilities() {
@@ -127,6 +136,8 @@ export class SpeechBridge {
     await this.checkCapabilities();
     if (this.disposed || this.epochs.get(sessionId) !== epoch || this.active !== sessionId) return;
     if (text.length > 10000) throw new Error('Reply exceeds the 10000-character speech limit; auto-reading skipped');
+    const started = diagnosticNow(), operation = ++this.traceSequence;
+    this.trace('speech.request', { request: operation, characters: text.length });
     try {
       const result = await this.post('/speak', {
         text, session_id: sessionId, request_id: requestId,
@@ -139,11 +150,13 @@ export class SpeechBridge {
         preview_mode: this.config.speechMode || 'realtime',
         playback_owner: this.config.playbackOwner || 'voicebox',
       });
+      this.trace('speech.ready', { request: operation, durationMs: diagnosticNow() - started });
       if (!this.disposed && this.epochs.get(sessionId) === epoch && this.active === sessionId) {
         if (notify) this.onSpeech?.(result);
         return result;
       }
     } catch (error) {
+      this.trace('speech.failed', { request: operation, durationMs: diagnosticNow() - started, aborted: error.name === 'AbortError' });
       // A timeout can hide a successful POST. Cancel by stable request id;
       // never issue an unkeyed retry that might create duplicate speech.
       await this.post('/speak/cancel', { session_id: sessionId, request_id: requestId }).catch(() => {});

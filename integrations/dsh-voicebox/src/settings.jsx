@@ -78,6 +78,18 @@ export function VoiceboxSettings({ form, controller, view }) {
       if (!abort.signal.aborted) setDiagnostics({ status: 'error', checks: [{ id: 'connection', status: 'error', message: error.message }] });
     } finally { if (!abort.signal.aborted) setChecking(false); }
   };
+  const exportDiagnostics = () => {
+    const snapshot = controller.diagnostics.snapshot();
+    const data = JSON.stringify(snapshot, null, 2);
+    const url = URL.createObjectURL(new Blob([data], { type: 'application/json' }));
+    const link = document.createElement('a');
+    link.href = url; link.download = 'dsh-voicebox-diagnostics.json';
+    try {
+      document.body.append(link); link.click();
+      setMessage(`已请求导出 ${snapshot.retained} 条诊断记录${snapshot.dropped ? `，省略 ${snapshot.dropped} 条较早记录` : ''}。自上次清空以来，完成 ${snapshot.counts['pcm.completed'] || 0} 段播放，检测到 ${snapshot.counts['pcm.underrun'] || 0} 次已恢复的音频空档。`);
+    }
+    finally { link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
+  };
   return <form className="dsh-voicebox-config" onSubmit={save} aria-label="Voicebox 语音配置">
     <h3>语音播报设置</h3>
     <p>设置保存在 DSH 当前配置中，供各会话的手动朗读和自动播报共用。</p>
@@ -165,6 +177,11 @@ export function VoiceboxSettings({ form, controller, view }) {
       </details>
       <div className="dsh-voicebox-config-actions"><button type="submit" disabled={!dirty || loadingProfiles || profiles.some(profile => profile.id === draft.profile && !profile.compatible)}>{busy ? '保存中…' : '保存设置'}</button><button type="button" disabled={!dirty} onClick={discard}>放弃修改</button></div>
     </fieldset>
+    <details><summary>本地语音诊断</summary>
+      <p>记录首包、播放、缓冲、识别与插话的技术时序，最近最多保留 512 条，仅存在当前窗口内存中。清空、刷新或退出后移除。</p>
+      <small>不含录音、转写、回复正文、会话与声音标识、设备名称或服务地址。导出后由你决定是否分享；播放时序不等于扬声器实际出声时间。</small>
+      <div className="dsh-voicebox-config-actions"><button type="button" onClick={exportDiagnostics}>导出诊断</button><button type="button" onClick={() => { controller.diagnostics.clear(); controller.recordSettings(); setMessage('本地诊断已清空。'); }}>清空诊断</button></div>
+    </details>
     {unavailable && <output>{state.status === 'loading' ? '正在读取插件配置…' : '当前配置不可写，请先启用 Voicebox 插件。'}</output>}
     {dirty && state.revision !== revision && <p role="alert">配置已在其他位置更新，请放弃修改后重新编辑。</p>}
     {message && <output>{message}</output>}

@@ -1,6 +1,7 @@
 import { SpeechBridge, spokenText } from './bridge.js';
 import { LiveNarration } from './live.js';
 import { DeliveryLedger } from './delivery.js';
+import { VoiceDiagnostics } from './telemetry.js';
 
 /** Consume only new durable deltas; restored history is available for manual read. */
 export class ReplyObserver {
@@ -57,15 +58,24 @@ export class DesktopSpeechController {
     this.playbackHolds = new Set();
     this.audioEpoch = 0;
     this.delivery = new DeliveryLedger();
+    this.diagnostics = new VoiceDiagnostics();
+    this.playSequence = 0;
     this.state = { enabled: false, voiceActive: false, phase: 'idle', elapsed: 0, latest: '', activeMessageId: undefined, error: '' };
     this.messages = new Map();
     this.readingMode = form?.getSnapshot().value?.readingMode || 'complete';
+    this.recordSettings = () => this.trace('settings.runtime', {
+      modelSize: '0.6B', speechMode: 'realtime', readingMode: this.readingMode, recognitionModel: 'turbo',
+      patience: 'balanced', allowInterrupt: false, backgroundListening: true, ...form?.getSnapshot().value,
+    });
+    this.recordSettings();
     this.offSettings = form?.subscribe(() => {
       const mode = form.getSnapshot().value?.readingMode || 'complete';
       if (mode !== this.readingMode) { this.stop(); this.readingMode = mode; }
+      this.recordSettings();
     });
     this.bridge = new SpeechBridge({ endpoint: 'http://voicebox.invalid', playbackOwner: 'client', voiceContinuation: () => this.state.voiceActive }, {
       fetch: speechFetch,
+      trace: (event, values) => this.trace(event, values),
       warn: (error) => this.update({ phase: 'error', error }),
       onInterrupt: () => this.silence(),
       onPreparing: (activeMessageId) => this.update({ activeMessageId, phase: 'buffering', error: '', elapsed: 0 }),
@@ -76,6 +86,7 @@ export class DesktopSpeechController {
       update: values => this.update({ ...values, ...(this.userPaused && values.phase === 'buffering' ? { phase: 'paused' } : {}) }),
       failed: values => this.update(values),
       voiceMode: () => this.state.voiceActive,
+      trace: (event, values) => this.trace(event, values),
       delivery: {
         enqueue: item => this.delivery.enqueue(item),
         playing: id => this.delivery.playing(id),
@@ -85,15 +96,19 @@ export class DesktopSpeechController {
     });
   }
   getSnapshot = () => this.state;
+  trace(event, values) { this.diagnostics.record(event, values); }
   subscribe = (listener) => { this.listeners.add(listener); return () => this.listeners.delete(listener); };
   playbackPaused() { return this.userPaused || this.playbackHolds.size > 0; }
   update(values) {
     if (this.playbackPaused() && ['buffering', 'playing'].includes(values.phase)) values = { ...values, phase: 'paused' };
+    if (values.phase && values.phase !== this.state.phase) this.trace('speaker.state', { state: values.phase });
+    if (values.waitingForText !== undefined && values.waitingForText !== this.state.waitingForText) this.trace('text.wait', { waiting: values.waitingForText });
     this.state = { ...this.state, ...values }; for (const listener of this.listeners) listener();
   }
   select(id) {
     const list = this.ctx.sessions.list.getSnapshot();
     if (id === this.sessionId) return;
+    this.trace('session.changed');
     this.conversation?.end();
     this.stop();
     this.offEvents?.(); this.offSession?.();
@@ -109,6 +124,8 @@ export class DesktopSpeechController {
       // The selected session keeps narrating when Desktop loses focus or is minimized.
       // Dropping background deltas would also break the streaming sentence cursor.
       if ((this.state.enabled || this.state.voiceActive) && !binding.session.getSnapshot().subagent) {
+        if (event.type === 'turn/start') this.trace('turn.start');
+        if (event.type === 'turn/end') this.trace('turn.end');
         if (this.readingMode === 'streaming' || this.state.voiceActive) this.live.handle(session, event);
         else this.bridge.handle(session, event);
       }
@@ -166,6 +183,7 @@ export class DesktopSpeechController {
     this.bridge.track(this.bridge.speak(this.sessionId, `manual:${crypto.randomUUID()}`, text, this.bridge.epochs.get(this.sessionId)));
   }
   silence() {
+    if (['buffering', 'playing', 'paused'].includes(this.state.phase)) this.trace('play.cancel');
     this.delivery.interrupt();
     this.audioEpoch++;
     this.live?.reset();
@@ -183,6 +201,8 @@ export class DesktopSpeechController {
     this.playAbort?.abort();
     const abort = new AbortController();
     this.playAbort = abort;
+    const piece = ++this.playSequence;
+    this.trace('play.request', { piece });
     const offset = continuation ? this.state.elapsed : 0;
     this.hasPlaybackProgress = false;
     this.update({ phase: this.playbackPaused() ? 'paused' : 'buffering', waitingForText: false, playbackText: generation.text || '' });
@@ -195,7 +215,8 @@ export class DesktopSpeechController {
       if (this.audio.state !== 'running' && !this.playbackPaused()) throw new Error('请点击回复下方的“朗读”启用音频播放');
       await this.play({ generation_id: generation.id, stream_audio: true }, 'http://voicebox.invalid', abort.signal,
         (elapsed, buffering = false) => { if (!abort.signal.aborted) { this.hasPlaybackProgress = true; this.update({ elapsed: offset + elapsed, phase: this.audio.state === 'suspended' ? 'paused' : buffering ? 'buffering' : 'playing' }); } },
-        { fetch: speechFetch, context: this.audio, resume: false, initialBufferSeconds: continuation && offset > 0 ? 0.04 : 0.8 });
+        { fetch: speechFetch, context: this.audio, resume: false, initialBufferSeconds: continuation && offset > 0 ? 0.04 : 0.8,
+          trace: event => this.trace(`pcm.${event.kind}`, { ...event, piece }) });
       if (!abort.signal.aborted && !continuation) this.update({ activeMessageId: undefined, phase: 'idle', elapsed: 0 });
     } catch (error) {
       if (!abort.signal.aborted) {
@@ -211,6 +232,7 @@ export class DesktopSpeechController {
     void this.setPaused(!this.userPaused);
   }
   async setPaused(paused) {
+    if (paused !== this.userPaused) this.trace('play.pause', { paused });
     this.userPaused = paused;
     await this.syncPlaybackPause();
     await this.conversation?.syncContext?.().catch(error => this.update({ notice: error.message }));
@@ -220,12 +242,14 @@ export class DesktopSpeechController {
   holdPlayback() {
     const lease = Symbol('voice input');
     this.playbackHolds.add(lease);
+    this.trace('play.hold');
     this.update({ inputHeld: true });
     void this.syncPlaybackPause();
     return {
       isCurrent: () => this.playbackHolds.has(lease),
       release: () => {
         if (!this.playbackHolds.delete(lease)) return;
+        this.trace('play.release');
         this.update({ inputHeld: this.playbackHolds.size > 0 });
         void this.syncPlaybackPause();
       },
@@ -250,5 +274,6 @@ export class DesktopSpeechController {
     await this.bridge.dispose();
     await this.audio?.close();
     this.listeners.clear();
+    this.diagnostics.dispose();
   }
 }

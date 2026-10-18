@@ -15,7 +15,7 @@ const bun = process.execPath;
 function run(command, args, cwd) {
   // Honour the operating system's trust store without disabling TLS validation.
   if (command === bun) args = ['--use-system-ca', ...args];
-  const result = spawnSync(command, args, { cwd, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
+  const result = spawnSync(command, args, { cwd, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024, timeout: 120_000 });
   if (result.error || result.status !== 0) throw new Error(`${command} ${args.join(' ')} failed\n${result.error || ''}\n${result.stdout}\n${result.stderr}`);
   return result.stdout.trim();
 }

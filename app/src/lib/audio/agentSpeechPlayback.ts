@@ -5,6 +5,13 @@ function abortError() {
   return new DOMException('Speech stopped', 'AbortError');
 }
 
+export type SpeechPlaybackTrace =
+  | { kind: 'first'; afterMs: number; sampleRate: number }
+  | { kind: 'started' | 'aborted'; afterMs: number }
+  | { kind: 'underrun'; gapMs: number; refillMs: number }
+  | { kind: 'completed'; afterMs: number; audioMs: number }
+  | { kind: 'failed'; afterMs: number; state: 'connect' | 'read' | 'decode' | 'schedule' | 'drain' };
+
 function wait(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal.aborted) { reject(abortError()); return; }
@@ -29,7 +36,7 @@ function nextAudio(reader: ReadableStreamDefaultReader<Uint8Array>, signal: Abor
 export async function playAgentSpeech(
   job: AgentSpeechJob, baseUrl: string, signal: AbortSignal,
   update: (elapsedMs: number, buffering?: boolean) => void,
-  options: { fetch?: typeof fetch; context?: AudioContext; resume?: boolean; initialBufferSeconds?: number } = {},
+  options: { fetch?: typeof fetch; context?: AudioContext; resume?: boolean; initialBufferSeconds?: number; trace?: (event: SpeechPlaybackTrace) => void } = {},
 ) {
   const id = encodeURIComponent(job.generation_id);
   if (!job.stream_audio) {
@@ -38,6 +45,9 @@ export async function playAgentSpeech(
     return;
   }
   if (signal.aborted) throw abortError();
+  const startedAt = performance.now();
+  const trace = (event: SpeechPlaybackTrace) => { try { options.trace?.(event); } catch { /* Observability must never alter audio. */ } };
+  let stage: 'connect' | 'read' | 'decode' | 'schedule' | 'drain' = 'connect';
   const context = options.context ?? new AudioContext();
   const nodes = new Set<AudioBufferSourceNode>();
   let timer: ReturnType<typeof setInterval> | undefined;
@@ -59,10 +69,18 @@ export async function playAgentSpeech(
     let end = 0;
     let first = 0;
     let played = 0;
+    let audioMs = 0;
+    let firstPcm = false, playbackStarted = false;
+    const observeStart = () => {
+      if (!playbackStarted && first && context.currentTime >= first && context.state === 'running' && !signal.aborted) {
+        playbackStarted = true; trace({ kind: 'started', afterMs: performance.now() - startedAt });
+      }
+    };
     const timeline: Array<{ start: number; duration: number }> = [];
     timer = setInterval(() => {
       const now = context.currentTime;
       if (!first || now < first || signal.aborted) return;
+      observeStart();
       while (timeline.length && now >= timeline[0].start + timeline[0].duration) {
         played += timeline.shift()!.duration;
       }
@@ -70,9 +88,13 @@ export async function playAgentSpeech(
       update(1000 * (played + (next ? Math.max(0, Math.min(now - next.start, next.duration)) : 0)), !next || now < next.start);
     }, 100);
     while (!signal.aborted) {
+      stage = 'read';
       const { value, done } = await nextAudio(reader, signal);
       if (done) break;
+      stage = 'decode';
       for (const packet of decoder.push(value)) {
+        if (!firstPcm) { firstPcm = true; trace({ kind: 'first', afterMs: performance.now() - startedAt, sampleRate: packet.sampleRate }); }
+        stage = 'schedule';
         // Backpressure bounds scheduled nodes and browser memory while the
         // server spools remaining PCM to disk.
         while (end - context.currentTime > 6) await wait(50, signal);
@@ -83,20 +105,33 @@ export async function playAgentSpeech(
         node.buffer = buffer;
         node.connect(context.destination);
         if (!first) end = context.currentTime + (options.initialBufferSeconds ?? 0.8);
-        else if (end < context.currentTime) end = context.currentTime + 0.3;
+        else if (end < context.currentTime) {
+          trace({ kind: 'underrun', gapMs: (context.currentTime - end) * 1000, refillMs: 300 });
+          end = context.currentTime + 0.3;
+        }
         first ||= end;
         node.start(end);
         timeline.push({ start: end, duration: buffer.duration });
         end += buffer.duration;
+        audioMs += buffer.duration * 1000;
         nodes.add(node);
         node.onended = () => { nodes.delete(node); node.disconnect(); };
       }
     }
     if (signal.aborted) throw abortError();
+    stage = 'decode';
     decoder.finish();
     if (!first) throw new Error('Speech completed without audio');
     // Completion is the end of playback, not receipt of the final PCM frame.
-    while (context.currentTime < end) await wait(50, signal);
+    stage = 'drain';
+    while (context.currentTime < end) { observeStart(); await wait(50, signal); }
+    if (signal.aborted) throw abortError();
+    observeStart();
+    trace({ kind: 'completed', afterMs: performance.now() - startedAt, audioMs });
+  } catch (error) {
+    trace(signal.aborted ? { kind: 'aborted', afterMs: performance.now() - startedAt }
+      : { kind: 'failed', afterMs: performance.now() - startedAt, state: stage });
+    throw error;
   } finally {
     if (timer) clearInterval(timer);
     signal.removeEventListener('abort', halt);

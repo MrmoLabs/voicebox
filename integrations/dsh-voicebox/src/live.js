@@ -2,8 +2,8 @@ import { SentenceBuffer, SentenceQueue } from './sentences.js';
 
 /** Live attempt/turn ownership sits above the existing scoped speech transport. */
 export class LiveNarration {
-  constructor(bridge, { play, update, failed, delivery, voiceMode = () => false }) {
-    Object.assign(this, { bridge, play, update, failed, delivery, voiceMode });
+  constructor(bridge, { play, update, failed, delivery, trace = () => {}, voiceMode = () => false }) {
+    Object.assign(this, { bridge, play, update, failed, delivery, trace, voiceMode });
   }
   reset() { this.queue?.cancel(); this.queue = undefined; this.attempt = undefined; this.blocked = undefined; this.finished = false; this.messageId = undefined; }
   fail(session, turn, error) {
@@ -45,6 +45,7 @@ export class LiveNarration {
         } else if (chunk.type === 'text-delta') {
           const block = attempt.blocks.get(chunk.index) || { type: 'text', text: '' };
           if (block.type !== 'text') return;
+          if (chunk.text && !attempt.hasText) { attempt.hasText = true; this.trace('text.first'); }
           if (attempt.lastBlock !== undefined && attempt.lastBlock !== chunk.index) attempt.buffer.append('\n');
           attempt.lastBlock = chunk.index;
           block.text += chunk.text;
@@ -106,6 +107,7 @@ export class LiveNarration {
       played: item => this.delivery?.played(item),
       prepare: item => {
         if (this.queue !== queue) return;
+        this.trace('text.queued', { characters: item.text.length, parts: item.parts?.length || 1 });
         this.update({ waitingForText: false });
         return this.bridge.speak(session.id, item.id, item.text, epoch, { notify: false });
       },
