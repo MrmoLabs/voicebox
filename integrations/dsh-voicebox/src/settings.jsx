@@ -21,6 +21,7 @@ export function VoiceboxSettings({ form, controller, view }) {
   const [microphones, setMicrophones] = useState([]);
   const [checking, setChecking] = useState(false);
   const [diagnostics, setDiagnostics] = useState(null);
+  const [exportText, setExportText] = useState('');
   const installationCheck = useRef(null);
   // biome-ignore lint/correctness/useExhaustiveDependencies: a saved revision invalidates every check against the previous configuration.
   useEffect(() => {
@@ -81,14 +82,21 @@ export function VoiceboxSettings({ form, controller, view }) {
   const exportDiagnostics = () => {
     const snapshot = controller.diagnostics.snapshot();
     const data = JSON.stringify(snapshot, null, 2);
-    const url = URL.createObjectURL(new Blob([data], { type: 'application/json' }));
-    const link = document.createElement('a');
-    link.href = url; link.download = 'dsh-voicebox-diagnostics.json';
+    setExportText(data);
+    let url, link;
     try {
+      url = URL.createObjectURL(new Blob([data], { type: 'application/json' }));
+      link = document.createElement('a');
+      link.href = url; link.download = 'dsh-voicebox-diagnostics.json';
       document.body.append(link); link.click();
-      setMessage(`已请求导出 ${snapshot.retained} 条诊断记录${snapshot.dropped ? `，省略 ${snapshot.dropped} 条较早记录` : ''}。自上次清空以来，完成 ${snapshot.counts['pcm.completed'] || 0} 段播放，检测到 ${snapshot.counts['pcm.underrun'] || 0} 次已恢复的音频空档。`);
+      setMessage(`已请求下载 ${snapshot.retained} 条诊断记录${snapshot.dropped ? `，省略 ${snapshot.dropped} 条较早记录` : ''}。如未保存文件，可复制下方 JSON。自上次清空以来，完成 ${snapshot.counts['pcm.completed'] || 0} 段播放，检测到 ${snapshot.counts['pcm.underrun'] || 0} 次已恢复的音频空档。`);
     }
-    finally { link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
+    catch { setMessage('当前窗口未能请求下载，请复制下方诊断 JSON。'); }
+    finally { link?.remove(); if (url) setTimeout(() => URL.revokeObjectURL(url), 1000); }
+  };
+  const copyDiagnostics = async () => {
+    try { await navigator.clipboard.writeText(exportText); setMessage('诊断 JSON 已复制。'); }
+    catch { setMessage('当前窗口无法自动复制，请在下方文本框中全选并复制。'); }
   };
   return <form className="dsh-voicebox-config" onSubmit={save} aria-label="Voicebox 语音配置">
     <h3>语音播报设置</h3>
@@ -180,7 +188,13 @@ export function VoiceboxSettings({ form, controller, view }) {
     <details><summary>本地语音诊断</summary>
       <p>记录首包、播放、缓冲、识别与插话的技术时序，最近最多保留 512 条，仅存在当前窗口内存中。清空、刷新或退出后移除。</p>
       <small>不含录音、转写、回复正文、会话与声音标识、设备名称或服务地址。导出后由你决定是否分享；播放时序不等于扬声器实际出声时间。</small>
-      <div className="dsh-voicebox-config-actions"><button type="button" onClick={exportDiagnostics}>导出诊断</button><button type="button" onClick={() => { controller.diagnostics.clear(); controller.recordSettings(); setMessage('本地诊断已清空。'); }}>清空诊断</button></div>
+      <div className="dsh-voicebox-config-actions"><button type="button" onClick={exportDiagnostics}>导出诊断</button><button type="button" onClick={() => { controller.diagnostics.clear(); controller.recordSettings(); setExportText(''); setMessage('本地诊断已清空。'); }}>清空诊断</button></div>
+      {exportText && <div>
+        <label htmlFor="voicebox-diagnostics-json">诊断 JSON 快照</label>
+        <textarea id="voicebox-diagnostics-json" rows={8} readOnly value={exportText} spellCheck={false} />
+        <small>这是导出时的快照；重新导出可更新。没有保存文件时，也可直接复制此文本。已保存的文件和剪贴板内容由你自行管理。</small>
+        <div className="dsh-voicebox-config-actions"><button type="button" onClick={copyDiagnostics}>复制诊断 JSON</button></div>
+      </div>}
     </details>
     {unavailable && <output>{state.status === 'loading' ? '正在读取插件配置…' : '当前配置不可写，请先启用 Voicebox 插件。'}</output>}
     {dirty && state.revision !== revision && <p role="alert">配置已在其他位置更新，请放弃修改后重新编辑。</p>}
