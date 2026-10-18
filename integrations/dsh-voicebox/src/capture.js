@@ -88,10 +88,14 @@ const WORKLET = `class VoiceboxCapture extends AudioWorkletProcessor {
 export async function openMicrophone({ deviceId, signal, frame, failed }) {
   if (!navigator.mediaDevices?.getUserMedia) throw new Error('当前窗口无法访问麦克风，请检查 Desktop 麦克风权限');
   let stream, context, source, processor, gain, url, closed = false, failure;
+  let settleClosed;
+  const whenClosed = new Promise(resolve => { settleClosed = resolve; });
   const ended = new Map();
   const close = () => {
     closed = true;
+    settleClosed();
     signal.removeEventListener('abort', close);
+    context?.removeEventListener('statechange', onStateChange);
     for (const [track, listener] of ended) track.removeEventListener('ended', listener);
     ended.clear();
     if (processor?.port) processor.port.onmessage = null;
@@ -110,6 +114,12 @@ export async function openMicrophone({ deviceId, signal, frame, failed }) {
     if (closed || signal.aborted) return;
     failure = error; close(); failed(error);
   };
+  const onStateChange = () => {
+    if (context?.state === 'closed') fail(new Error('录音上下文已关闭，请重新开始语音对话'));
+  };
+  // Browser initialization can remain pending after closure. Race only context
+  // operations; a late getUserMedia result must still be acquired and stopped.
+  const wait = async operation => { await Promise.race([operation, whenClosed]); check(); };
   signal.addEventListener('abort', close, { once: true });
   try {
     check();
@@ -124,15 +134,15 @@ export async function openMicrophone({ deviceId, signal, frame, failed }) {
       track.addEventListener('ended', listener); ended.set(track, listener);
     }
     context = new AudioContext();
-    await context.resume();
-    check();
+    context.addEventListener('statechange', onStateChange);
+    onStateChange(); check();
+    await wait(context.resume());
     source = context.createMediaStreamSource(stream);
     gain = context.createGain(); gain.gain.value = 0; gain.connect(context.destination);
     if (context.audioWorklet) {
       try {
         url = URL.createObjectURL(new Blob([WORKLET], { type: 'text/javascript' }));
-        await context.audioWorklet.addModule(url);
-        check();
+        await wait(context.audioWorklet.addModule(url));
         processor = new AudioWorkletNode(context, 'voicebox-capture', { channelCount: 1, channelCountMode: 'explicit' });
         processor.port.onmessage = event => { if (!closed && !signal.aborted) frame(event.data, context.sampleRate); };
         processor.onprocessorerror = () => fail(new Error('录音处理已中断，请重新开始语音对话'));

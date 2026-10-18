@@ -1,7 +1,7 @@
 <!doctype html><html lang="zh"><meta charset="utf-8"><title>Voicebox capture lifecycle verification</title>
 <style>body{max-width:850px;margin:48px auto;padding:0 24px;font:16px/1.6 system-ui}button{padding:10px 18px}pre{white-space:pre-wrap}</style>
 <h1>录入生命周期验收</h1><p>使用真实浏览器音频 API 与静默合成流。不会开启物理麦克风、请求权限或生成可听声音。断开由测试事件模拟，不代表已完成物理设备拔插验收。</p>
-<button id="run">运行四项检查</button><pre id="result">尚未运行</pre>
+<button id="run">运行七项检查</button><pre id="result">尚未运行</pre>
 <h2>播放故障检查</h2><p>此组须使用 Bun 启动验收服务。只播放全零 PCM，验证上下文关闭、暂停恢复及异常清理。</p>
 <button id="playback">运行四项播放检查</button><pre id="playback-result">尚未运行</pre>
 <script type="module">
@@ -22,7 +22,7 @@ async function scenario(mode) {
       super(...args); contexts.push(this);
       const add = this.audioWorklet.addModule.bind(this.audioWorklet);
       this.audioWorklet.addModule = async url => {
-        if (mode === 'initialization-disconnect') await new Promise(resolve => { release = resolve; });
+        if (['initialization-disconnect', 'initialization-context-close'].includes(mode)) await new Promise(resolve => { release = resolve; });
         if (mode === 'fallback-close') throw Error('Simulated CSP module rejection');
         await add(url);
         if (mode === 'processor-error') {
@@ -38,11 +38,12 @@ async function scenario(mode) {
   navigator.mediaDevices.getUserMedia = async () => destination.stream;
   try {
     const opening = openMicrophone({ signal:abort.signal, frame:()=>frames++, failed:error=>failures.push(error.message) });
-    if (mode === 'initialization-disconnect') {
+    if (['initialization-disconnect', 'initialization-context-close'].includes(mode)) {
       await until(() => release);
-      track.dispatchEvent(new Event('ended')); release();
+      if (mode === 'initialization-disconnect') { track.dispatchEvent(new Event('ended')); release(); }
+      else await contexts[0].close();
       const outcome = await opening.then(value => { handle = value; return ''; }, error => error.message);
-      assert(outcome.includes('麦克风已断开'), 'Initialization must reject a disconnected stream');
+      assert(outcome.includes(mode === 'initialization-disconnect' ? '麦克风已断开' : '录音上下文已关闭'), 'Initialization must reject closed capture resources');
       assert(failures.length === 1, 'One disconnection failure expected');
     } else {
       handle = await opening;
@@ -51,8 +52,19 @@ async function scenario(mode) {
         assert(failures.length === 1 && failures[0].includes('录音处理'), 'Native processorerror must terminate capture');
       } else {
         await until(() => frames > 0);
-        handle.close(); handle.close();
-        assert(failures.length === 0, 'Normal close must not report a failure');
+        if (mode === 'context-close') {
+          await contexts[0].close(); await until(() => failures.length > 0);
+          assert(failures.length === 1 && failures[0].includes('录音上下文已关闭'), 'Context closure must terminate capture');
+        } else {
+          if (mode === 'suspend-resume') {
+            await contexts[0].suspend(); await sleep(80);
+            assert(failures.length === 0 && track.readyState === 'live', 'Ordinary suspension must preserve capture');
+            assert(contexts[0].state === 'suspended', 'Capture must not force a paused context to resume');
+            await contexts[0].resume();
+          }
+          handle.close(); handle.close();
+          assert(failures.length === 0, 'Normal close must not report a failure');
+        }
       }
     }
     await until(() => contexts.every(context => context.state === 'closed'));
@@ -70,7 +82,7 @@ document.querySelector('#run').onclick = async () => {
   document.querySelectorAll('button').forEach(button => { button.disabled = true; });
   const report = { browser:navigator.userAgent, scope:'Native browser AudioContext/AudioWorklet/MediaStream with silent synthetic input; disconnect and CSP failures injected; no hardware permission, physical unplug, ASR or LLM', results:[] };
   try {
-    for (const mode of ['normal-close', 'initialization-disconnect', 'processor-error', 'fallback-close']) {
+    for (const mode of ['normal-close', 'initialization-disconnect', 'processor-error', 'fallback-close', 'context-close', 'initialization-context-close', 'suspend-resume']) {
       document.querySelector('#result').textContent = `正在检查：${mode}`;
       report.results.push(await scenario(mode));
     }
