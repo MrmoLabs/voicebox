@@ -4,6 +4,8 @@
 
 自然语音对话方案见 [设计文档](DESIGN-voice-interaction.md)。首版已接入会话表达策略、详细展开计划、实际播放位置和输入区控制条；跨重启精确恢复、完整语义覆盖和所有场景的人耳验收仍未完成。
 
+当前候选版本为 `0.2.0-beta.1`，未发布到 npm / GitHub Release。预构建包的支持条件、安装和回退步骤见 [安装指南](INSTALL.md)，阶段目标与验收门槛见 [推进计划](ROADMAP.md)。
+
 ## 使用体验
 
 - 每条已完成的 AI 回复下方，在复制按钮旁提供喇叭图标，点击朗读对应回复。输入框上方提供“语音对话”入口和“自动朗读：开 / 关”按钮，状态直接显示在按钮文字中。
@@ -20,7 +22,7 @@
 ## 前提
 
 1. 使用本仓库包含本次集成修改的 Voicebox 后端，已经配置可供 Qwen 使用的音色及模型。
-2. `/speak` 的 OpenAPI 必须包含 `request_id`、`stream_audio` 和 `playback_owner`，并提供 `/speak/cancel`。版本号 `0.6.0` 本身不能证明这些能力已安装。
+2. `/speak` 的 OpenAPI 必须包含 `request_id`、`stream_audio`、`preview_mode` 和 `playback_owner`，并提供 `/speak/cancel`。版本号 `0.6.0` 本身不能证明这些能力已安装。设置中的“检查安装条件”可只读检查接口、CUDA、模型缓存和声音档案。
 3. Voicebox 后端默认监听 `http://127.0.0.1:17493`。可在插件配置里指定其他地址。
 
 DSH Desktop 负责实际播放；Voicebox 主窗口和悬浮窗不会同时播放这条回复。
@@ -41,7 +43,7 @@ bun run build
 D:\Projects\Voicebox\integrations\dsh-voicebox
 ```
 
-也可以安装打包后的 `dsh-voicebox-0.1.0.tgz`，以目标版本的插件安装器支持的输入为准。首次安装与更新应使用 Desktop 自己的插件入口，不直接修改它的 profile 或内置文件。
+也可以安装预构建的 `dsh-voicebox-0.2.0-beta.1.tgz`，以目标版本的插件安装器支持的输入为准。首次安装与更新应使用 Desktop 自己的插件入口，不直接修改它的 profile 或内置文件。
 
 安装后，在 Voicebox 设置中为客户端 `dsh-voicebox` 绑定默认音色，或填写插件的 `profile`。打开普通会话，点击输入区的“自动朗读：关”开启，随后发送一条消息。点击开关或回复下方的喇叭，也会完成浏览器音频权限所需的用户手势。
 

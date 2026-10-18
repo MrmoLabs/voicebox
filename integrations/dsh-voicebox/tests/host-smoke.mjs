@@ -26,7 +26,7 @@ const { Context } = await import(pathToFileURL(dshRequire.resolve('@deepseek-ai/
 const { default: SessionStore } = await import(pathToFileURL(entry).href);
 const { createMessage, createUserMessage } = await import(pathToFileURL(dshRequire.resolve('@deepseek-ai/dsh-llm')).href);
 const { HostConnectionService } = await import(pathToFileURL(packaged ? dshRequire.resolve('@deepseek-ai/dsh-client-connection') : path.join(root, 'packages/client/connection/lib/index.js')).href);
-const plugin = await import('../lib/index.js');
+const plugin = await import(process.argv[3] ? pathToFileURL(path.resolve(process.argv[3])).href : '../lib/index.js');
 const requests = [];
 const server = createServer(async (req, res) => {
   let body = '';
@@ -36,8 +36,8 @@ const server = createServer(async (req, res) => {
   res.end(JSON.stringify(req.url === '/models/status' ? { models: [{ model_name: 'whisper-turbo', downloaded: true }] }
     : req.url === '/transcribe' ? { text: '真实宿主代理录音转写测试', duration: 60 }
     : req.url === '/openapi.json' ? {
-    paths: { '/speak/cancel': {} },
-    components: { schemas: { SpeakRequest: { properties: { request_id: {}, stream_audio: {}, preview_mode: {} } } } },
+    paths: { '/speak': { post: {} }, '/speak/cancel': { post: {} }, '/generate/{generation_id}/live': { get: {} } },
+    components: { schemas: { SpeakRequest: { properties: { request_id: {}, stream_audio: {}, preview_mode: {}, playback_owner: {} } } } },
   } : { id: 'smoke-generation' }));
 });
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));

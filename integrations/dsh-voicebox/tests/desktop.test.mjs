@@ -104,7 +104,7 @@ test('Desktop keeps manual and automatic speech in the background, stops on subm
   globalThis.__DSH_TRANSPORT__ = { fetch: async (url, init) => {
     const path = new URL(url, 'http://dsh').searchParams.get('path');
     calls.push({ path, body: init.body && JSON.parse(init.body) });
-    return Response.json(path === '/openapi.json' ? { paths: { '/speak/cancel': {} }, components: { schemas: { SpeakRequest: { properties: { request_id: {}, stream_audio: {}, preview_mode: {} } } } } } : { id: 'gen-1' });
+    return Response.json(path === '/openapi.json' ? { paths: { '/speak': { post: {} }, '/speak/cancel': { post: {} }, '/generate/{generation_id}/live': { get: {} } }, components: { schemas: { SpeakRequest: { properties: { request_id: {}, stream_audio: {}, preview_mode: {}, playback_owner: {} } } } } } : { id: 'gen-1' });
   } };
   const events = store(snapshot(1, [start, user, reply('History'), end], 'replace'));
   const session = store({ subagent: null, pendingSubmissions: [] });

@@ -41,11 +41,14 @@ const server = createServer(async (req, res) => {
         res.on('close', () => clearInterval(timer));
         return;
       }
-      const data = url.pathname.endsWith('/models/status') ? { models: [{ model_name: 'whisper-base', downloaded: true }, { model_name: 'whisper-turbo', downloaded: true }] }
+      const data = url.pathname.endsWith('/health') ? { status: 'healthy', gpu_available: true, gpu_type: 'CUDA (fixture)' }
+        : url.pathname.endsWith('/mcp/bindings') ? { items: [] }
+        : url.pathname.endsWith('/settings/captures') ? { default_playback_voice_id: 'preview-voice' }
+        : url.pathname.endsWith('/models/status') ? { models: [{ model_name: 'whisper-base', downloaded: true }, { model_name: 'whisper-turbo', downloaded: true }, { model_name: 'qwen-tts-0.6B', downloaded: true }] }
         : url.pathname.endsWith('/profiles') ? [{ id: 'preview-voice', name: '模拟声音', language: 'zh', voice_type: 'cloned' }]
         : url.pathname.endsWith('/transcribe') ? { text: '这是一句模拟语音输入。', duration: .7 }
         : url.pathname.endsWith('/openapi.json') ? {
-        paths: { '/speak/cancel': {} }, components: { schemas: { SpeakRequest: { properties: { request_id: {}, stream_audio: {}, preview_mode: {} } } } },
+        paths: { '/speak': { post: {} }, '/speak/cancel': { post: {} }, '/generate/{generation_id}/live': { get: {} } }, components: { schemas: { SpeakRequest: { properties: { request_id: {}, stream_audio: {}, preview_mode: {}, playback_owner: {} } } } },
       } : { id: `fixture-${++nextId}`, text: lastSpeech };
       res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(data)); return;
     }

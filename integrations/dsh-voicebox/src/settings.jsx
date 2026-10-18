@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { speechFetch } from './controller.js';
 import { saveSettings } from './settings.js';
 import { VOICE_DEFAULTS } from './conversation.js';
@@ -19,6 +19,14 @@ export function VoiceboxSettings({ form, controller, view }) {
   const [refresh, setRefresh] = useState(0);
   const [loadingProfiles, setLoadingProfiles] = useState(false);
   const [microphones, setMicrophones] = useState([]);
+  const [checking, setChecking] = useState(false);
+  const [diagnostics, setDiagnostics] = useState(null);
+  const installationCheck = useRef(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a saved revision invalidates every check against the previous configuration.
+  useEffect(() => {
+    installationCheck.current?.abort(); setChecking(false); setDiagnostics(null);
+    return () => installationCheck.current?.abort();
+  }, [state.revision, view]);
   useEffect(() => {
     if (view === 'summary' || !navigator.mediaDevices?.enumerateDevices) return;
     let disposed = false;
@@ -57,9 +65,29 @@ export function VoiceboxSettings({ form, controller, view }) {
   };
   const unavailable = state.status !== 'ready' || !state.writable;
   const unknownProfile = draft.profile && !profiles.some(profile => profile.id === draft.profile);
+  const check = async () => {
+    installationCheck.current?.abort();
+    const abort = new AbortController(); installationCheck.current = abort;
+    setChecking(true); setDiagnostics(null);
+    try {
+      const response = await speechFetch('http://voicebox.invalid/diagnostics', { signal: AbortSignal.any([abort.signal, AbortSignal.timeout(16_000)]) });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || '安装检查失败，请稍后重试。');
+      if (!abort.signal.aborted) setDiagnostics(data);
+    } catch (error) {
+      if (!abort.signal.aborted) setDiagnostics({ status: 'error', checks: [{ id: 'connection', status: 'error', message: error.message }] });
+    } finally { if (!abort.signal.aborted) setChecking(false); }
+  };
   return <form className="dsh-voicebox-config" onSubmit={save} aria-label="Voicebox 语音配置">
     <h3>语音播报设置</h3>
     <p>设置保存在 DSH 当前配置中，供各会话的手动朗读和自动播报共用。</p>
+    <div className="dsh-voicebox-installation">
+      <button type="button" onClick={check} disabled={unavailable || busy || dirty || checking}>{checking ? '检查中…' : '检查安装条件'}</button>
+      <small>{dirty ? '请先保存设置，再检查新配置。' : '检查已保存设置；不会开启麦克风、合成语音或下载模型。'}</small>
+      {diagnostics && <div aria-live="polite" aria-atomic="true"><p>{diagnostics.status === 'pass' ? '安装条件检查通过，接下来可试播并测试麦克风。' : diagnostics.status === 'warning' ? '检查完成，以下条件需要确认。' : '以下条件需要处理。'}</p>
+        <ul>{diagnostics.checks.map(item => <li key={item.id}><strong>{item.status === 'pass' ? '通过' : item.status === 'warning' ? '待确认' : '需处理'}</strong>：{item.message}</li>)}</ul>
+      </div>}
+    </div>
     <fieldset disabled={unavailable || busy}>
       <label htmlFor="voicebox-reading-mode">自动播报方式</label>
       <select id="voicebox-reading-mode" value={draft.readingMode} onChange={event => edit('readingMode', event.target.value)}>
@@ -148,6 +176,8 @@ export const SETTINGS_CSS = `
 .dsh-voicebox-config h3{margin:0 0 8px;font-size:16px}
 .dsh-voicebox-config p,.dsh-voicebox-config small{font-size:12px;line-height:1.6;opacity:.8}
 .dsh-voicebox-config>output{display:block;margin:12px 0;font-size:12px;line-height:1.6}
+.dsh-voicebox-installation{margin:16px 0;padding-block:12px;border-block:1px solid var(--dsw-alias-border-default,rgba(127,127,127,.4))}
+.dsh-voicebox-installation ul{padding-left:20px;font-size:12px;line-height:1.8}
 .dsh-voicebox-config fieldset{border:0;padding:0;margin:16px 0;min-width:0}
 .dsh-voicebox-config label{display:block;font-size:13px;margin:18px 0 8px}
 .dsh-voicebox-config select,.dsh-voicebox-config input,.dsh-voicebox-config textarea{box-sizing:border-box;width:100%;padding:9px 10px;border:1px solid var(--dsw-alias-border-default,rgba(127,127,127,.4));border-radius:var(--dsw-alias-border-radius-sm,4px);font:inherit;color:inherit;background:var(--dsw-alias-background-primary,transparent)}

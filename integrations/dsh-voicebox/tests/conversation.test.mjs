@@ -326,7 +326,7 @@ test('Desktop voice mode forces streaming only for the call and closes the micro
     if (path === '/listen/status') return Response.json({ ready: true });
     if (path === '/conversation') return Response.json({ ok: true });
     if (path === '/listen') return Response.json({ text: '测试语音提问' });
-    if (path === '/openapi.json') return Response.json({ paths: { '/speak/cancel': {} }, components: { schemas: { SpeakRequest: { properties: { request_id: {}, stream_audio: {}, preview_mode: {} } } } } });
+    if (path === '/openapi.json') return Response.json({ paths: { '/speak': { post: {} }, '/speak/cancel': { post: {} }, '/generate/{generation_id}/live': { get: {} } }, components: { schemas: { SpeakRequest: { properties: { request_id: {}, stream_audio: {}, preview_mode: {}, playback_owner: {} } } } } });
     return Response.json({ id: `g-${turn}` });
   } };
   const form = store({ value: { ...VOICE_DEFAULTS, readingMode: 'complete' } });

@@ -1,4 +1,5 @@
 import { WhisperInput } from './listening.js';
+import { checkInstallation } from './diagnostics.js';
 
 /** Exact Connection route: works over Desktop IPC and authenticated Web HTTP. */
 export class VoiceboxProxy {
@@ -22,6 +23,12 @@ export class VoiceboxProxy {
     if ((path === '/listen' && request.method === 'POST') || (path === '/listen/status' && request.method === 'GET')) return this.input.handle(request);
     if (path === '/settings' && request.method === 'GET') {
       return json({ ...this.config, streamAudio: true });
+    }
+    if (path === '/diagnostics' && request.method === 'GET') {
+      try {
+        const signal = AbortSignal.any([request.signal, this.abort.signal, AbortSignal.timeout(15_000)]);
+        return json(await checkInstallation(this.config, this.endpoint, this.fetcher, signal));
+      } catch { return json({ error: '安装检查已取消或超时，请稍后重试。' }, 502); }
     }
     let body;
     let liveId;

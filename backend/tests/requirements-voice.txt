@@ -1,0 +1,21 @@
+# CPU-only contracts; install torch and torchaudio separately from the CPU index.
+# No engine model weights or portable installation are required.
+pytest==9.1.1
+pytest-asyncio==1.4.0
+fastapi==0.141.1
+pydantic==2.13.4
+sqlalchemy==2.0.51
+httpx==0.28.1
+numpy==1.26.4
+scipy==1.17.1
+transformers==4.57.3
+accelerate==1.12.0
+librosa==0.11.0
+soundfile==0.14.0
+fastmcp==3.4.7
+python-multipart==0.0.32
+Pillow==12.3.0
+psutil==7.2.2
+sox==1.5.0
+onnxruntime==1.28.0
+einops==0.8.2

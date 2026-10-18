@@ -1,6 +1,6 @@
 {
   "name": "dsh-voicebox",
-  "version": "0.1.0",
+  "version": "0.2.0-beta.1",
   "description": "Hands-free voice conversations and streaming reply narration for DeepSeek Harness through local Voicebox.",
   "type": "module",
   "main": "lib/index.js",
@@ -11,17 +11,25 @@
   "files": [
     "src/*.js",
     "lib",
+    "LICENSE",
     "cordis.patch.yml",
     "README.md",
     "VERIFICATION.md",
+    "DESIGN-voice-interaction.md",
+    "INSTALL.md",
+    "ROADMAP.md",
     "third-party"
   ],
   "scripts": {
     "build": "bun scripts/build.mjs",
-    "test": "node --test tests/*.test.mjs"
+    "test": "node --test tests/*.test.mjs",
+    "prepack": "bun run build",
+    "verify:package": "bun scripts/verify-package.mjs",
+    "verify:dsh": "node scripts/verify-dsh-install.mjs"
   },
   "engines": {
-    "node": ">=22.19.0"
+    "node": ">=22.19.0",
+    "dsh": "0.2.1-rc.1 || 0.2.1-rc.2"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.2"

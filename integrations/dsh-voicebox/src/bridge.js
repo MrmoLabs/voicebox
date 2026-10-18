@@ -1,3 +1,5 @@
+import { supportsSpeech } from './diagnostics.js';
+
 /** Convert already-selected assistant text, never reasoning/tool blocks. */
 export function spokenText(text) {
   let fence;
@@ -113,8 +115,7 @@ export class SpeechBridge {
 
   async checkCapabilities() {
     this.capabilities ??= this.request('/openapi.json').then((schema) => {
-      const properties = schema.components?.schemas?.SpeakRequest?.properties;
-      if (!properties?.request_id || !properties?.stream_audio || !properties?.preview_mode || !schema.paths?.['/speak/cancel']) {
+      if (!supportsSpeech(schema)) {
         throw new Error('Update the Voicebox backend and desktop app to the dsh integration build first');
       }
     }).catch((error) => { this.capabilities = undefined; throw error; });

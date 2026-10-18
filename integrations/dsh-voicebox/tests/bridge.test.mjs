@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { SpeechBridge, spokenText } from '../src/bridge.js';
 
-const schema = { paths: { '/speak/cancel': {} }, components: { schemas: {
-  SpeakRequest: { properties: { request_id: {}, stream_audio: {}, preview_mode: {} } },
+const schema = { paths: { '/speak': { post: {} }, '/speak/cancel': { post: {} }, '/generate/{generation_id}/live': { get: {} } }, components: { schemas: {
+  SpeakRequest: { properties: { request_id: {}, stream_audio: {}, preview_mode: {}, playback_owner: {} } },
 } } };
 
 function setup(config = {}, intercept) {

@@ -1,19 +1,23 @@
-"""Run streaming regression tests with the installed portable dependencies."""
+"""Run voice contracts in CI or with this machine's optional portable deps."""
 import os
 import site
 import sys
 from pathlib import Path
 
 workspace = Path(__file__).resolve().parents[1]
-portable = Path(os.environ['APPDATA']) / 'sh.voicebox.app/backends/cuda/python-backend'
-internal = portable.parent / '_internal'
-sys.path[:0] = [str(workspace / 'backend/vendor'), str(workspace), str(portable / 'performance-site-packages')]
-site.addsitedir(str(portable / 'site-packages'))
-site.addsitedir(str(internal))
-site.addsitedir(str(Path(os.environ['APPDATA']) / 'Python/Python312/site-packages'))
+sys.path[:0] = [str(workspace / 'backend/vendor'), str(workspace)]
+handles = []
+if os.name == 'nt' and os.environ.get('VOICEBOX_TEST_PORTABLE', '1') != '0':
+    portable = Path(os.environ['APPDATA']) / 'sh.voicebox.app/backends/cuda/python-backend'
+    if portable.is_dir():
+        internal = portable.parent / '_internal'
+        sys.path.insert(0, str(portable / 'performance-site-packages'))
+        site.addsitedir(str(portable / 'site-packages'))
+        site.addsitedir(str(internal))
+        site.addsitedir(str(Path(os.environ['APPDATA']) / 'Python/Python312/site-packages'))
+        handles = [os.add_dll_directory(str(path)) for path in (internal, internal / 'torch/lib') if path.is_dir()]
 # CLI subprocesses need the same installed dependencies as the test process.
 os.environ['PYTHONPATH'] = os.pathsep.join(sys.path)
-handles = [os.add_dll_directory(str(path)) for path in (internal, internal / 'torch/lib') if path.is_dir()]
 numba_cache = workspace / '.tmp-stream-test-numba'
 numba_cache.mkdir(exist_ok=True)
 os.environ['NUMBA_CACHE_DIR'] = str(numba_cache)

@@ -7,7 +7,7 @@ import { DesktopSpeechController } from '../src/controller.js';
 
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const sentence = n => `这是第${n}段正在逐步生成的正文内容，完整句子出现以后就可以开始朗读。`;
-const capabilities = { paths: { '/speak/cancel': {} }, components: { schemas: { SpeakRequest: { properties: { request_id: {}, stream_audio: {}, preview_mode: {} } } } } };
+const capabilities = { paths: { '/speak': { post: {} }, '/speak/cancel': { post: {} }, '/generate/{generation_id}/live': { get: {} } }, components: { schemas: { SpeakRequest: { properties: { request_id: {}, stream_audio: {}, preview_mode: {}, playback_owner: {} } } } } };
 
 test('sentence cursor survives fragmented fences, links, inline code, comments and decimal numbers', () => {
   const pieces = [];
