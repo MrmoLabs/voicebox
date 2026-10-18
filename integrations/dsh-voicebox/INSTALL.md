@@ -69,3 +69,11 @@ bun tests/local-roundtrip-smoke.mjs --run ../../release/self-check/local-roundtr
 ```
 
 它复用当前 Qwen 规格、已有 DSH 默认声音绑定，以一条合成短句重复验证真实识别、唯一提交、生产分句队列和静默 PCM 调度。回复 / 会话上下文为脚本，不访问真实麦克风或扬声器，不调用远程 LLM，不下载模型、不写用户配置。测试历史和合成音频均保留；结果与 WAV 写入指定目录。它不能代替真实设备、音质和自然追问验收。
+
+另外可使用同样的空闲与模型条件，检查真实推理取消、请求去重及取消后恢复：
+
+```powershell
+bun tests/local-recovery-smoke.mjs --run ../../release/self-check/local-recovery
+```
+
+它仅操作随机测试会话及该次创建的任务，保留全部历史；不会重启服务或停止其他会话。结果包含服务端取消收尾观察时间，不能用于判断硬件静音速度。
