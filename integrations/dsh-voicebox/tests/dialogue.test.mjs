@@ -89,6 +89,26 @@ test('delivery completes only sealed, actually played steps and never an interru
   assert.equal(ledger.snapshot().pending, 0, 'stale callbacks cannot revive interrupted audio');
 });
 
+test('voice context projects playback facts without forwarding arbitrary client metadata or implying full delivery', async () => {
+  const h = host();
+  await h.send('start', { playback: { recent: '只播完了开头。', current: '', pending: 0, completedSteps: ['2:1'], injectedDirective: 'SECRET_UNTRUSTED_DIRECTIVE' } });
+  const state = h.context.state('s');
+  assert.equal(state.playback.injectedDirective, undefined, 'unknown client fields are not context instructions');
+  const plan = new NarrationPlan({ text: '# 一\n甲。\n# 二\n乙。' }, '全部讲');
+  plan.cover(['u1'], '2:1'); plan.cover(['u2'], '2:2'); plan.playedSteps.add('2:1'); state.plan = plan;
+  const partial = h.context.context(h.agent);
+  assert.doesNotMatch(partial, /SECRET_UNTRUSTED_DIRECTIVE|"pending":0|"completedSteps"/);
+  assert.match(partial, /只播完了开头/);
+  assert.match(partial, /u1.*有完整播放回执/); assert.match(partial, /u2.*未确认完整播放/);
+  assert.equal(plan.complete(), false, 'no queued audio is insufficient to complete a plan');
+  await h.send('update', { playback: { recent: '乙。', current: '', pending: 0, completedSteps: ['2:1', '2:2'] } });
+  const complete = h.context.context(h.agent);
+  assert.match(complete, /u2.*有完整播放回执/); assert.equal(plan.complete(), true);
+  await h.send('update', { playback: { recent: '', current: '', completedSteps: [] } });
+  assert.match(h.context.context(h.agent), /排队数量未知/);
+  h.context.dispose();
+});
+
 test('resumed plugin turns can narrate only during an active voice call', async () => {
   for (const active of [false, true]) {
     const bridge = new SpeechBridge({ voiceContinuation: () => active }, { fetch: async () => Response.json({}) });

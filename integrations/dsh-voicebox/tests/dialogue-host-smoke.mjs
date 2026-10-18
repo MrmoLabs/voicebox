@@ -45,7 +45,9 @@ try {
     pluginCtx.effect(() => () => voice.dispose(), 'test voice lifecycle');
   } });
   await voiceFiber.await();
-  const state = await voice.handle(new Request('http://host', { method: 'POST', body: JSON.stringify({ action: 'start', session_id: agent.session.id, epoch: 'owner' }) }));
+  const state = await voice.handle(new Request('http://host', { method: 'POST', body: JSON.stringify({ action: 'start', session_id: agent.session.id, epoch: 'owner',
+    playback: { recent: '已播完的片段。', current: '', pending: 0, completedSteps: [], extraMetadata: 'DO_NOT_FORWARD_CLIENT_METADATA' },
+  }) }));
   assert.equal(state.status, 200);
   const send = async value => { agent.followup(createUserMessage({ content: [{ type: 'text', text: value }], source: { kind: 'user' } })); await agent.whenIdle(); };
   await send('讲讲成本和限制');
@@ -59,6 +61,10 @@ try {
   assert.ok(requests.some(request => JSON.stringify(request).includes('尚未验证')));
   assert.ok(agent.session.log.some(event => event.type === 'tool/result' && !event.data.error));
   const scoped = await ctx.systemPrompt.assemble({ agent, scope: agent });
+  const voiceText = scoped.contexts.find(part => part.name === 'voicebox:conversation').text;
+  assert.doesNotMatch(voiceText, /DO_NOT_FORWARD_CLIENT_METADATA|"pending":0|"completedSteps"/);
+  assert.match(voiceText, /u1.*未确认完整播放/);
+  assert.match(voiceText, /当前没有排队片段.*不能证明/);
   assert.ok(scoped.tools.some(tool => tool.name === 'voicebox_progress'));
   assert.ok(!scoped.tools.some(tool => tool.name === 'voicebox_branch'), 'ordinary voice turns do not expose a branch control');
   const paused = voice.state(agent.session.id);
