@@ -1,4 +1,5 @@
 import { MAX_RECORDING_MS, SILENCE_MS } from './voice-config.js';
+import { INPUT_RMS_THRESHOLD } from './input-signal.js';
 
 /** Bounded local endpointing. This energy detector is not semantic speech VAD. */
 export class UtteranceDetector {
@@ -11,7 +12,7 @@ export class UtteranceDetector {
     const ms = frame.length * 1000 / this.sampleRate;
     let power = 0;
     for (const value of frame) power += value * value;
-    const voiced = Math.sqrt(power / frame.length) >= 0.015;
+    const voiced = Math.sqrt(power / frame.length) >= INPUT_RMS_THRESHOLD;
     if (!this.active) {
       // Count voiced time in a short rolling window. Normal unvoiced syllable
       // gaps must not reset onset, while old clicks cannot accumulate forever.
@@ -160,6 +161,8 @@ export async function openMicrophone({ deviceId, signal, frame, failed }) {
     }
     source.connect(processor); processor.connect(gain);
     return { close, setMuted: muted => { for (const track of stream?.getAudioTracks() || []) track.enabled = !muted; },
+      getStatus: () => ({ contextState: context?.state || 'closed', trackMuted: stream?.getAudioTracks()[0]?.muted === true,
+        trackEnabled: stream?.getAudioTracks()[0]?.enabled === true }),
       echoCancellation: stream.getAudioTracks()[0]?.getSettings().echoCancellation === true };
   } catch (error) { close(); throw error; }
 }

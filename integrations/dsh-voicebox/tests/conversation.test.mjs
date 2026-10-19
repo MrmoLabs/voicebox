@@ -121,6 +121,23 @@ test('a newly ready idle call accepts its first fragmented utterance without a h
   await tick(); assert.equal(h.calls.length, 1); assert.equal(h.submissions.length, 1);
 });
 
+test('live input observations expose threshold and busy gates without submitting audio or changing the call', async t => {
+  const h = harness(), traces = []; t.after(() => h.service.dispose());
+  h.speaker.trace = (event, values) => traces.push({ event, values });
+  await h.service.start();
+  h.feed(pcm(.003), 16000); h.service.publishInputSignal();
+  assert.equal(h.service.state.inputSignal.state, 'quiet'); assert.equal(h.service.state.phase, 'listening');
+  h.session.set({ ...h.session.getSnapshot(), running: true });
+  h.feed(pcm(.03), 16000); h.service.publishInputSignal();
+  assert.equal(h.service.state.inputSignal.state, 'blocked'); assert.equal(h.service.state.inputSignal.gate, 'busy');
+  assert.equal(h.calls.length, 0); assert.equal(h.cancels.length, 0);
+  assert.equal(traces.filter(item => item.event === 'input.signal').length, 2);
+  h.service.end(); assert.equal(h.service.signalTimer, undefined); assert.equal(h.service.signal, undefined);
+  assert.equal(h.service.state.inputSignal, undefined);
+  const count = traces.length; h.service.publishInputSignal(); h.feed(pcm(), 16000);
+  assert.equal(traces.length, count, 'late frames and samples cannot revive diagnostics after ending');
+});
+
 test('recording, delayed recognition and official submission report pending input until the turn is accepted', async t => {
   let recognize, accept;
   const h = harness({ listen: () => new Promise(resolve => { recognize = resolve; }) });

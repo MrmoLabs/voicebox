@@ -3,6 +3,7 @@ import { VOICE_DEFAULTS, SILENCE_MS } from './voice-config.js';
 import { isPlaybackEcho } from './echo.js';
 import { voiceIntent } from './content.js';
 import { diagnosticNow } from './telemetry.js';
+import { InputSignal } from './input-signal.js';
 
 export { VOICE_DEFAULTS } from './voice-config.js';
 
@@ -73,6 +74,16 @@ export class VoiceConversation {
     return this.contextFlight;
   }
   finishInput() { if (this.state.phase === 'capturing') this.detector?.finish(); }
+  publishInputSignal() {
+    if (!this.state.active || !this.signal) return;
+    let device;
+    try { device = this.microphone?.getStatus?.(); } catch { /* Diagnostics cannot interrupt capture. */ }
+    const inputSignal = this.signal.snapshot(device);
+    this.update({ inputSignal });
+    const key = `${inputSignal.state}:${inputSignal.gate}:${inputSignal.contextState}`;
+    if (this.signalSamples++ < 30 || key !== this.lastSignalKey) this.speaker.trace?.('input.signal', inputSignal);
+    this.lastSignalKey = key;
+  }
   beginCandidate() {
     if (this.candidate || !this.busy()) return;
     const candidate = { heard: this.heard(), reference: this.speaker.state.phase === 'playing' ? this.speaker.state.playbackText : '' };
@@ -137,11 +148,13 @@ export class VoiceConversation {
         else this.refresh();
       });
       this.offSpeaker = this.speaker.subscribe(() => this.refresh());
+      this.signal = new InputSignal(); this.signalSamples = 0; this.lastSignalKey = undefined;
       const microphone = await this.capture({ deviceId: this.settings().microphoneId, signal: abort.signal,
         frame: (samples, rate) => this.frame(samples, rate), failed: error => this.fail(error, abort),
       });
       if (abort.signal.aborted) { microphone.close(); return; }
       this.microphone = microphone;
+      this.signalTimer = setInterval(() => this.publishInputSignal(), 1000); this.signalTimer.unref?.();
       this.update({ phase: 'listening', echoCancellation: this.microphone.echoCancellation, recognitionModel: status.model || this.settings().recognitionModel });
       this.onVisibility();
       // A fresh idle call has no outgoing answer echo to drain. Once it says
@@ -163,9 +176,12 @@ export class VoiceConversation {
   frame(samples, sampleRate) {
     if (!this.state.active || this.abort?.signal.aborted) return;
     const settings = this.settings(), busy = this.busy();
-    const blocked = this.state.muted || this.backgroundBlocked() || ['starting', 'transcribing', 'sending'].includes(this.state.phase)
-      || (busy && !this.manualFloor && !this.candidate && !this.canAutoInterrupt()) || (this.coolUntil && Date.now() < this.coolUntil);
-    if (blocked) {
+    const gate = this.state.muted ? 'muted' : this.backgroundBlocked() ? 'background'
+      : ['starting', 'transcribing', 'sending'].includes(this.state.phase) ? this.state.phase
+      : busy && !this.manualFloor && !this.candidate && !this.canAutoInterrupt() ? 'busy'
+      : this.coolUntil && Date.now() < this.coolUntil ? 'cooldown' : 'open';
+    this.signal?.observe(samples, sampleRate, gate);
+    if (gate !== 'open') {
       this.detector?.reset();
       if (this.state.phase === 'capturing') { this.discardInput(); this.refresh(); }
       return;
@@ -299,6 +315,8 @@ export class VoiceConversation {
   }
   end() {
     const active = this.state.active;
+    if (active) this.publishInputSignal();
+    clearInterval(this.signalTimer); this.signalTimer = undefined; this.signal = undefined;
     if (active) this.speaker.trace?.('call.end');
     clearInterval(this.contextHeartbeat); this.contextHeartbeat = undefined;
     void this.syncContext('end').catch(() => {}); this.contextEpoch = undefined;
@@ -308,7 +326,7 @@ export class VoiceConversation {
     this.detector?.reset(); this.detector = undefined; this.coolUntil = undefined;
     this.input?.abort.abort(); this.input = undefined;
     this.interrupted = false; this.manualFloor = false; this.cancelPending = undefined;
-    this.update({ active: false, phase: 'idle', muted: false, confirming: false, plan: undefined });
+    this.update({ active: false, phase: 'idle', muted: false, confirming: false, plan: undefined, inputSignal: undefined });
     if (active) this.speaker.setVoiceActive(false);
     this.releaseCandidate();
   }

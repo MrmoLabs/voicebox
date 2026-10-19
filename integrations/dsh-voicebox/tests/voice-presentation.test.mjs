@@ -23,3 +23,12 @@ test('distinguish first synthesis, audio starvation and late model text', () => 
   assert.equal(voicePresentation(state, { phase: 'buffering', waitingForText: true, elapsed: 1200 }).label, '等待下一段正文…');
   assert.equal(voicePresentation({ active: false }, { phase: 'playing' }).paused, true);
 });
+
+test('missing or suspended input is not described as listening and cannot hide active speech', () => {
+  for (const state of ['missing', 'suspended', 'device-muted']) {
+    const call = { active: true, phase: 'listening', inputSignal: { state } };
+    assert.doesNotMatch(voicePresentation(call).label, /正在听/);
+    assert.equal(voicePresentation(call, { phase: 'playing' }).label, '正在播报');
+    assert.equal(voicePresentation({ ...call, phase: 'capturing' }).label, '正在听你说话…');
+  }
+});

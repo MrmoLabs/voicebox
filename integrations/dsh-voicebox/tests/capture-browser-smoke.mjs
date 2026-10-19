@@ -10,6 +10,8 @@ const routes = new Map([
   ['/', new URL('./capture-browser-smoke.html', import.meta.url)],
   ['/capture.js', new URL('../src/capture.js', import.meta.url)],
   ['/voice-config.js', new URL('../src/voice-config.js', import.meta.url)],
+  ['/input-signal.js', new URL('../src/input-signal.js', import.meta.url)],
+  ['/telemetry.js', new URL('../src/telemetry.js', import.meta.url)],
 ]);
 const server = createServer(async (req, res) => {
   try {

@@ -1,6 +1,7 @@
 import { useId, useState, useSyncExternalStore } from 'react';
 import { VoiceOrb } from './voice-orb.jsx';
 import { voicePresentation } from './voice-presentation.js';
+import { inputSignalLabel } from './input-signal.js';
 
 function CallIcon({ kind }) {
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -55,6 +56,9 @@ export function ConversationDock({ conversation, sessionId }) {
     {state.error && <p role="alert">{state.error}</p>}
     {state.plan?.limited && <output>讲解尚未完整，自动补充已达到保护限制；可指定需要继续的部分。</output>}
     <div id={detailsId} className="dsh-voicebox-call-details" hidden={!expanded}>
+      {state.inputSignal && <div><p>麦克风输入：{inputSignalLabel(state.inputSignal)}</p>
+        <meter aria-label="麦克风输入音量" min="0" max="100" value={Math.max(0, Math.min(100, (state.inputSignal.peakDb + 80) * 1.25))} />
+      </div>}
       {!state.transcript && <p>转写与语音详情</p>}
       {state.transcript && <p className="dsh-voicebox-call-transcript">你说：{state.transcript}</p>}
       {state.notice && <p>{state.notice}</p>}

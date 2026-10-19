@@ -1,3 +1,5 @@
+import { inputSignalLabel } from './input-signal.js';
+
 /** Visual state only. Never changes microphone, playback, or generation state. */
 export function voicePresentation(state, speaker = {}) {
   if (!state.active) return { label: '语音对话已停止', orb: 'breathing', paused: true };
@@ -17,5 +19,6 @@ export function voicePresentation(state, speaker = {}) {
   if (state.phase === 'answering') return { label: '正在回答…', orb: 'working' };
   if (state.phase === 'muted') return { label: '麦克风已静音', orb: 'breathing', paused: true };
   if (state.phase === 'background') return { label: '后台监听已暂停', orb: 'breathing', paused: true };
+  if (['missing', 'suspended', 'device-muted'].includes(state.inputSignal?.state)) return { label: inputSignalLabel(state.inputSignal), orb: 'breathing', paused: true };
   return { label: '正在听', orb: 'breathing', speed: .7 };
 }

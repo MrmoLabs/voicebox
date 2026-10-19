@@ -100,9 +100,11 @@ test('an unexpectedly closed recording context stops capture once without accept
 
 test('normal suspension does not end recording or force the context to resume', async t => {
   const h = browser(t), handle = await h.open();
+  assert.deepEqual(handle.getStatus(), { contextState: 'running', trackMuted: false, trackEnabled: true });
   h.contexts[0].transition('suspended'); h.contexts[0].transition('running');
   assert.equal(h.failures.length, 0); assert.equal(h.track.stops, 0);
   handle.close(); assert.equal(h.failures.length, 0); assert.equal(h.track.stops, 1);
+  assert.equal(handle.getStatus().contextState, 'closed');
 });
 
 test('aborting a pending resume settles initialization without waiting for the browser promise', { timeout: 1500 }, async t => {

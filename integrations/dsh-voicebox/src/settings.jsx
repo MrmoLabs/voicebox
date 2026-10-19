@@ -186,7 +186,7 @@ export function VoiceboxSettings({ form, controller, view }) {
       <div className="dsh-voicebox-config-actions"><button type="submit" disabled={!dirty || loadingProfiles || profiles.some(profile => profile.id === draft.profile && !profile.compatible)}>{busy ? '保存中…' : '保存设置'}</button><button type="button" disabled={!dirty} onClick={discard}>放弃修改</button></div>
     </fieldset>
     <details><summary>本地语音诊断</summary>
-      <p>记录首包、播放、缓冲、识别与插话的技术时序，最近最多保留 512 条，仅存在当前窗口内存中。清空、刷新或退出后移除。</p>
+      <p>记录输入音量与状态、首包、播放、缓冲、识别与插话的技术时序，最近最多保留 512 条，仅存在当前窗口内存中。清空、刷新或退出后移除。</p>
       <small>不含录音、转写、回复正文、会话与声音标识、设备名称或服务地址。导出后由你决定是否分享；播放时序不等于扬声器实际出声时间。</small>
       <div className="dsh-voicebox-config-actions"><button type="button" onClick={exportDiagnostics}>导出诊断</button><button type="button" onClick={() => { controller.diagnostics.clear(); controller.recordSettings(); setExportText(''); setMessage('本地诊断已清空。'); }}>清空诊断</button></div>
       {exportText && <div>
