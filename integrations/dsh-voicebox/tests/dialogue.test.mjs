@@ -75,7 +75,7 @@ test('continuation distinguishes pause, detail, backchannel, correction and loca
 });
 
 test('explicit return phrases select the original explanation rather than expanding the local answer', () => {
-  for (const text of ['继续刚才的讲解', '请继续之前的内容。', '回到原来的话题', '接着被打断的讲解往下说', '从刚才打断的地方继续讲']) {
+  for (const text of ['继续刚才的讲解', '继续刚才的讲解吧', '请继续之前的内容。', '回到原来的话题', '接着被打断的讲解往下说', '从刚才打断的地方继续讲']) {
     const intent = voiceIntent(text, { busy: true, paused: true });
     assert.equal(intent.kind, 'question', text);
     assert.equal(intent.continuation, true, text);
@@ -401,6 +401,47 @@ test('an idle transition discards uncommitted inbox previews without reviving a 
   assert.doesNotMatch(h.context.context(h.agent), /明确要求接回/);
   h.context.close('s'); h.hooks.get('agent/inbox/claimed')({ agent: h.agent, message });
   assert.equal(h.context.state('s'), undefined);
+  h.context.dispose();
+});
+
+test('ordinary speech interruptions retain the original question and cursor without requiring a prior detail plan', async () => {
+  const h = host(); h.context.install(); await h.send('start');
+  h.session.log = [
+    { seq: 1, type: 'turn/start', data: { turn: 1 } },
+    { seq: 2, type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '讲讲方案成本和限制，简短一些。' }] } },
+    { seq: 3, type: 'assistant/message', data: { turn: 1, step: 1, message: { content: [{ type: 'text', text: '# 成本\n需要预算。\n# 限制\n尚未验证。' }] } } },
+  ];
+  const interruption = { sequence: 1, playback: { recent: '需要预算。', current: '尚未验证。', pending: 1, completedSteps: [] } };
+  await h.send('update', { interruption });
+  const user = text => h.context.observe(h.session, { seq: 4, type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text }] } });
+  user('等等，你说一下这个预算的问题');
+  const state = h.context.state('s'), original = state.returnPlan;
+  assert.equal(original.mode, 'resume'); assert.equal(original.request, '讲讲方案成本和限制，简短一些。');
+  assert.equal(state.returnPlayback.current, '尚未验证。');
+  assert.equal(state.returnDecision, 'pending');
+  await h.send('update', { interruption });
+  assert.equal(state.interruption, undefined, 'repeated heartbeat cannot re-arm a consumed interruption');
+  user('继续刚才的讲解吧');
+  assert.equal(state.plan, original); assert.equal(state.returnPlan, undefined);
+  const prompt = h.context.context(h.agent);
+  assert.match(prompt, /接续被打断的普通回答.*保持原问题的详略/);
+  assert.match(prompt, /讲讲方案成本和限制，简短一些/);
+  assert.match(prompt, /尚未验证/);
+  assert.doesNotMatch(prompt, /用户要求详细展开上一答复/);
+  h.context.dispose();
+});
+
+test('interruption positions reject malformed metadata and stop discards the pending target', async () => {
+  const h = host(); await h.send('start');
+  const playback = { recent: '', current: '原回答。', pending: 1, completedSteps: [] };
+  for (const interruption of [null, { sequence: 0, playback }, { sequence: 1, playback: { ...playback, current: 'x'.repeat(501) } }, { sequence: 1, playback: { ...playback, completedSteps: ['invented'] } }]) {
+    assert.equal((await h.send('update', { interruption })).status, 400);
+    assert.equal(h.context.state('s').interruption, undefined);
+  }
+  await h.send('update', { interruption: { sequence: 2, playback } });
+  await h.send('update', { interruption: { sequence: 1, playback: { ...playback, current: '迟到的旧位置' } } });
+  assert.equal(h.context.state('s').interruption.playback.current, '原回答。');
+  await h.send('update', { stopped: true }); assert.equal(h.context.state('s').interruption, undefined);
   h.context.dispose();
 });
 

@@ -164,7 +164,7 @@ try {
   assert.equal(voice.state(agent.session.id).returnPlan, explicitParent);
   const returnRequest = requests.length;
   script.push(explain('u2', '接回原讲解的限制：尚未验证，不能当成已经成功。'), [...text('原限制继续说明完毕。'), finish]);
-  await send('继续刚才的讲解');
+  await send('继续刚才的讲解吧');
   assert.equal(script.length, 0, 'explicit return must not need a branch tool choice');
   assert.equal(voice.state(agent.session.id).plan, explicitParent);
   assert.equal(voice.state(agent.session.id).returnPlan, undefined);
@@ -173,6 +173,25 @@ try {
   assert.match(returnContext, /明确要求接回.*原讲解/);
   assert.match(returnContext, /尚未验证/);
   assert.doesNotMatch(returnContext, /先处理本次局部讨论/);
+
+  Object.assign(voice.state(agent.session.id), { plan: undefined, returnPlan: undefined, returnDecision: undefined, waiting: false });
+  script.push([...text('# 成本\n需要十元预算。\n# 限制\n结果尚未验证。'), finish]);
+  await send('讲讲方案成本和限制，简短一些');
+  assert.equal(voice.state(agent.session.id).plan, undefined, 'ordinary answers need no prior expansion plan');
+  await voice.handle(new Request('http://host', { method: 'POST', body: JSON.stringify({ action: 'update', session_id: agent.session.id, epoch: 'owner',
+    interruption: { sequence: 1, playback: { recent: '需要十元预算。', current: '结果尚未验证。', pending: 1, completedSteps: [] } },
+  }) }));
+  script.push([...text('先说明预算：这是示例金额。'), finish]); await send('等等，你说一下这个预算的问题');
+  const ordinaryParent = voice.state(agent.session.id).returnPlan;
+  assert.equal(ordinaryParent.mode, 'resume');
+  const ordinaryRequest = requests.length;
+  script.push(explain('u2', '接回原方案的限制：结果尚未验证。'), [...text('本次原回答接续结束。'), finish]);
+  await send('继续刚才的讲解吧');
+  assert.equal(voice.state(agent.session.id).plan, ordinaryParent);
+  const ordinaryContext = requests[ordinaryRequest].messages.filter(message => message.source?.kind === 'runtime-context').at(-1)?.source.sections.find(section => section.name === 'voicebox:conversation')?.text || '';
+  assert.match(ordinaryContext, /接续被打断的普通回答/);
+  assert.match(ordinaryContext, /讲讲方案成本和限制，简短一些/);
+  assert.match(ordinaryContext, /结果尚未验证/);
 
   setupParent();
   script.push([...text('需要哪一种例子？'), finish]); await send('第二点详细解释');

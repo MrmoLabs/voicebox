@@ -64,7 +64,7 @@ export function ConversationDock({ conversation, sessionId }) {
       {state.notice && <p>{state.notice}</p>}
       <p>停顿后自动发送；正常短暂停顿会继续等待，也可点“说完了，发送”。</p>
       <p>语音识别：Whisper {state.recognitionModel === 'turbo' ? 'large-v3 turbo' : state.recognitionModel || conversation.settings().recognitionModel}</p>
-      {state.plan && <p>当前详细讲解：{state.plan.total} 个内容单元，{state.plan.remaining} 个待补充解释。解释登记不等于已经播放。</p>}
+      {state.plan && <p>当前讲解：{state.plan.total} 个内容单元，{state.plan.remaining} 个待补充解释。解释登记不等于已经播放。</p>}
       {state.active && conversation.settings().allowInterrupt && state.echoCancellation !== true && <p>设备未确认回声消除，播报时请使用“打断并说话”。</p>}
     </div>
   </section></div>;

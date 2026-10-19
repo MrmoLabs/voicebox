@@ -286,6 +286,22 @@ test('completed AI turns only stop remaining speech and submit a new queued turn
   assert.equal(h.calls[0].mode, 'queue'); h.service.dispose();
 });
 
+test('a committed interruption sends the original cursor before stop clears it and releases it on call end', async t => {
+  const h = harness({ allowInterrupt: true }); t.after(() => h.service.dispose()); await h.service.start(); h.service.coolUntil = 0;
+  let current = '原回答被打断的片段。';
+  h.speaker.delivery = { snapshot: () => ({ recent: '之前已播部分。', current, pending: current ? 1 : 0, completedSteps: [] }) };
+  const stop = h.speaker.stop.bind(h.speaker);
+  h.speaker.stop = () => { current = ''; stop(); };
+  h.speaker.state = { phase: 'playing', playbackText: current };
+  utterance(h.feed); await tick();
+  const update = h.contexts.find(value => value.interruption);
+  assert.equal(update.interruption.sequence, 1);
+  assert.equal(update.interruption.playback.current, '原回答被打断的片段。');
+  assert.equal(update.playback.current, '');
+  assert.equal(h.calls.length, 1);
+  h.service.end(); assert.equal(h.service.interruptionPosition, undefined); assert.equal(h.service.interruptionSequence, 0);
+});
+
 test('brief playback noise does not pause or cancel the current answer', async () => {
   const h = harness({ allowInterrupt: true }); await h.service.start(); h.service.coolUntil = 0;
   h.session.set({ ...h.session.getSnapshot(), running: true });

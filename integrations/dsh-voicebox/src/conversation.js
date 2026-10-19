@@ -60,11 +60,12 @@ export class VoiceConversation {
     const epoch = this.contextEpoch, id = this.id;
     if (!epoch) return Promise.resolve();
     const playback = this.speaker.delivery?.snapshot() || { recent: '', current: '', completedSteps: [] };
+    const interruption = this.interruptionPosition;
     const send = async () => {
       if (action !== 'end' && (this.contextEpoch !== epoch || !this.state.active)) return;
       const response = await this.fetcher('http://voicebox.invalid/conversation', {
         method: 'POST', headers: { 'content-type': 'application/json' }, signal: AbortSignal.timeout(5000),
-        body: JSON.stringify({ action, session_id: id, epoch, playback, paused: this.speaker.userPaused === true, stopped: this.contextStopped === true, inputPending: this.inputPending() }),
+        body: JSON.stringify({ action, session_id: id, epoch, playback, interruption, paused: this.speaker.userPaused === true, stopped: this.contextStopped === true, inputPending: this.inputPending() }),
       });
       const data = await response.json();
       if (!response.ok || data.ok !== true) throw new Error(data.error || '无法同步会话语音上下文，请更新 DSH 插件');
@@ -203,6 +204,11 @@ export class VoiceConversation {
     if (!this.state.active || !this.busy()) return;
     const abort = this.abort, session = this.session;
     const generating = this.generating();
+    // Stopping clears the current playback cursor. Preserve it before that
+    // mutation, with a lease-local sequence so heartbeats cannot replay it.
+    this.interruptionSequence = (this.interruptionSequence || 0) + 1;
+    this.interruptionPosition = { sequence: this.interruptionSequence,
+      playback: this.speaker.delivery?.snapshot() || { recent: '', current: this.speaker.state.playbackText || '', completedSteps: [] } };
     this.speaker.stop();
     this.update({ heard });
     this.interrupted = generating;
@@ -326,6 +332,7 @@ export class VoiceConversation {
     this.detector?.reset(); this.detector = undefined; this.coolUntil = undefined;
     this.input?.abort.abort(); this.input = undefined;
     this.interrupted = false; this.manualFloor = false; this.cancelPending = undefined;
+    this.interruptionPosition = undefined; this.interruptionSequence = 0;
     this.update({ active: false, phase: 'idle', muted: false, confirming: false, plan: undefined, inputSignal: undefined });
     if (active) this.speaker.setVoiceActive(false);
     this.releaseCandidate();
