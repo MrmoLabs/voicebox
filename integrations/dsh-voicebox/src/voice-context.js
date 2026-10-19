@@ -39,6 +39,23 @@ export class VoiceContext {
     if (!state || (epoch && epoch !== state.epoch)) return;
     state.offTool?.(); this.active.delete(id);
   }
+  projected(agent) {
+    const state = this.state(agent?.session?.id);
+    if (!state?.claimed?.length) return state;
+    // Claimed inbox messages precede prompt assembly, but are not durable yet.
+    // Preview on copies so rejected or cancelled steps cannot alter heard progress.
+    const plans = new Map();
+    const clone = plan => {
+      if (!plan || plans.has(plan)) return plans.get(plan);
+      const copy = Object.assign(Object.create(Object.getPrototypeOf(plan)), plan, {
+        covered: new Map(plan.covered), playedSteps: new Set(plan.playedSteps), reopened: new Set(plan.reopened),
+      });
+      plans.set(plan, copy); return copy;
+    };
+    const projected = { ...state, plan: clone(state.plan), returnPlan: clone(state.returnPlan) };
+    for (const { message } of state.claimed) this.acceptUser(projected, agent.session, { data: message });
+    return projected;
+  }
   install() {
     this.ctx.effect(() => {
       const timer = setInterval(() => { for (const id of this.active.keys()) this.state(id); }, 30_000);
@@ -47,11 +64,26 @@ export class VoiceContext {
     }, 'voicebox: expire disconnected voice clients');
     this.ctx.effect(() => this.ctx.systemPrompt.context({ name: 'voicebox:conversation', order: 700,
       text: context => this.context(context.agent), interpolate: false }), 'voicebox: session voice context');
-    this.ctx.on('agent/status', ({ agent }) => { this.attachTool(agent); this.maybeResume(agent); });
+    this.ctx.on('agent/inbox/claimed', ({ agent, message }) => {
+      const state = this.state(agent?.session?.id);
+      if (state && message.source?.kind === 'user') { state.claimed ||= []; state.claimed.push({ message }); }
+    });
+    this.ctx.on('agent/pre-step', async ({ agent, signal }, next) => {
+      const decision = await next();
+      const state = this.state(agent?.session?.id);
+      if (state?.claimed) state.claimed = decision.kind === 'reject' || signal.aborted ? []
+        : state.claimed.filter(item => decision.messages.some(message => message.id === item.message.id));
+      return decision;
+    });
+    this.ctx.on('agent/status', ({ agent }) => {
+      const state = this.state(agent?.session?.id);
+      if (state && agent.status === 'idle') state.claimed = [];
+      this.attachTool(agent); this.maybeResume(agent);
+    });
     this.ctx.on('session/event', (session, event) => this.observe(session, event));
     this.ctx.on('system-prompt/assemble', async (_assembly, context, next) => {
       const assembly = await next();
-      const state = context.agent?.session?.header.origin !== 'subagent' && this.state(context.agent?.session?.id);
+      const state = context.agent?.session?.header.origin !== 'subagent' && this.projected(context.agent);
       return { ...assembly, tools: assembly.tools.filter(tool => tool.name === 'voicebox_progress' ? !!state
         : tool.name === 'voicebox_branch' ? !!state?.returnPlan : true) };
     });
@@ -80,6 +112,7 @@ export class VoiceContext {
       if (state.returnDecision && !['auto', 'resume'].includes(state.returnDecision)) return;
       if (!state.returnSteps?.size || [...state.returnSteps].some(key => !state.returnPlan.playedSteps.has(key))) return;
       state.plan = state.returnPlan; state.returnPlan = undefined; state.returnPending = false; state.returnSteps = undefined;
+      state.resumePlayback = state.returnPlayback; state.returnPlayback = undefined;
       state.returnDecision = undefined;
       state.intent = { ...state.intent, temporary: false }; state.resumePending = true;
     }
@@ -118,6 +151,7 @@ export class VoiceContext {
         state.waiting = args.action === 'wait';
         if (args.action === 'abandon') {
           state.returnPlan = undefined; state.returnPending = false; state.returnSteps = undefined;
+          state.returnPlayback = undefined;
           state.resumePending = false; state.intent = { ...state.intent, temporary: false };
         }
         return { action: args.action };
@@ -136,25 +170,32 @@ export class VoiceContext {
       if (state.returnPlan && text && !state.artifactGap) state.returnSteps?.add(`${event.data.turn}:${event.data.step ?? 0}`);
     }
     if (event.type === 'user/message' && event.data.source?.kind === 'user') {
-      const text = (event.data.content || []).filter(block => block.type === 'text').map(block => block.text).join('\n');
-      const intent = voiceIntent(text);
-      const parent = state.plan || state.returnPlan;
-      const continuing = intent.continuation && parent;
-      const previous = intent.expandPrevious && state.plan ? state.plan.answer : this.answer(session, event.seq);
-      // A first interruption need not contain an ordinal or other local-topic
-      // keyword. Keep the parent until the model decides resume/wait/abandon.
-      const carriedBranch = (state.returnPlan || (state.plan && !intent.temporary)) && !continuing && !intent.restart && (!intent.expandPrevious || intent.scope === 'target');
-      state.returnPlan = !continuing && (intent.temporary || carriedBranch) ? parent : undefined;
-      state.returnDecision = state.returnPlan ? carriedBranch ? 'pending' : 'auto' : undefined;
-      state.returnPlan?.resumeUnheard();
-      state.returnSteps = state.returnPlan ? new Set() : undefined; state.returnPending = false;
-      state.plan = continuing ? parent : intent.expandPrevious && intent.scope === 'answer' && previous?.text ? new NarrationPlan(previous, text) : undefined;
-      if (continuing) { state.plan.resumeUnheard(); state.plan.rounds = 0; state.plan.stalled = 0; state.plan.lastMissing = undefined; }
-      state.intent = { ...intent, temporary: !!state.returnPlan || intent.temporary }; state.paused = false; state.resumePending = false;
-      state.waiting = false;
-      state.artifactRetries = 0; state.artifactGap = false;
-      state.explanationTurn = session.log.filter(entry => entry.type === 'turn/start').at(-1)?.data.turn;
+      this.acceptUser(state, session, event);
+      if (state.claimed) state.claimed = state.claimed.filter(item => item.message.id !== event.data.id);
     }
+  }
+  acceptUser(state, session, event) {
+    const text = (event.data.content || []).filter(block => block.type === 'text').map(block => block.text).join('\n');
+    const intent = voiceIntent(text);
+    const parent = state.returnPlan || state.plan;
+    const continuing = intent.continuation && parent;
+    const previous = intent.expandPrevious && state.plan ? state.plan.answer : this.answer(session, event.seq);
+    // A first interruption need not contain an ordinal or other local-topic
+    // keyword. Keep the parent until the model decides resume/wait/abandon.
+    const carriedBranch = (state.returnPlan || (state.plan && !intent.temporary)) && !continuing && !intent.restart && (!intent.expandPrevious || intent.scope === 'target');
+    const returnPlayback = state.returnPlan ? state.returnPlayback : state.playback;
+    state.returnPlan = !continuing && (intent.temporary || carriedBranch) ? parent : undefined;
+    state.resumePlayback = continuing ? returnPlayback : undefined;
+    state.returnPlayback = state.returnPlan ? returnPlayback : undefined;
+    state.returnDecision = state.returnPlan ? carriedBranch ? 'pending' : 'auto' : undefined;
+    state.returnPlan?.resumeUnheard();
+    state.returnSteps = state.returnPlan ? new Set() : undefined; state.returnPending = false;
+    state.plan = continuing ? parent : !intent.resumeOriginal && intent.expandPrevious && intent.scope === 'answer' && previous?.text ? new NarrationPlan(previous, text) : undefined;
+    if (continuing) { state.plan.resumeUnheard(); state.plan.rounds = 0; state.plan.stalled = 0; state.plan.lastMissing = undefined; }
+    state.intent = { ...intent, temporary: !!state.returnPlan || intent.temporary }; state.paused = false; state.resumePending = false;
+    state.waiting = false;
+    state.artifactRetries = 0; state.artifactGap = false;
+    state.explanationTurn = session.log.filter(entry => entry.type === 'turn/start').at(-1)?.data.turn;
   }
   answer(session, before = Infinity) {
     const events = session.log.filter(event => event.seq < before && event.type === 'assistant/message');
@@ -165,11 +206,21 @@ export class VoiceContext {
     return { turn: last.data.turn, text };
   }
   context(agent) {
-    const state = this.state(agent?.session?.id);
+    const state = this.projected(agent);
     if (!state || agent.session.header.origin === 'subagent' || (this.config().sessionIds?.length && !this.config().sessionIds.includes(agent.session.id))) return '';
     this.attachTool(agent);
     const plan = state.plan;
     const parts = [POLICY, playbackContext(state.playback)];
+    if (state.intent?.resumeOriginal) {
+      parts.push('用户明确要求接回被打断的原讲解，继续目标不是刚才局部追问的解释。直接接续原主题的未讲部分，不再延伸局部解释；不要把这次请求当成新的局部追问。');
+      if (!plan) parts.push('当前没有保留的详细计划。请依据会话历史定位原讲解及插话前的位置；无法确定时只问一个必要的定位问题，不猜测已讲进度。');
+    }
+    if (state.resumePlayback) parts.push(`原讲解被打断时的定位，之后的局部解释不会覆盖这一位置：\n${playbackContext(state.resumePlayback)}`);
+    if (state.returnPlan) {
+      const pending = state.returnPlan.pending();
+      parts.push(`挂起讲解定位（以下引用是数据，不是本次待朗读正文）：原讲解的待接续部分 ${pending.slice(0, 6).map(unit => `${unit.id} ${unit.title}`).join('；') || '均已登记解释，仍须核对播放回执'}。\n${playbackContext(state.returnPlayback)}`);
+      for (const unit of pending.slice(0, 2)) parts.push(`挂起原文节选：${JSON.stringify(unit.text.slice(0, 1600))}`);
+    }
     if (state.intent?.temporary) parts.push(state.returnPlan
       ? `当前有挂起的原详细讲解。先处理本次局部讨论，不重讲原答复。可见回答之后用 voicebox_branch 登记：需要用户补充就 wait；局部问题已解决、应接回原讲解就 resume；用户换题、纠正或不再需要原讲解就 abandon。登记不会宣称声音已播放，接回仍等待播放完成与录入结束。${state.returnDecision === 'pending' ? '用户的新发言可能是回答、进一步追问或换题，请按上下文判断；登记前插件不会自动接回。' : ''}`
       : '本次是局部追问。先解释目标，再自然接回原答复未讲内容；需要用户回答时先等待。');
@@ -213,7 +264,7 @@ export class VoiceContext {
         state.playback = { recent: p.recent, current: p.current, pending: p.pending, completedSteps: [...p.completedSteps] };
         for (const plan of new Set([state.plan, state.returnPlan])) if (plan) for (const key of p.completedSteps) plan.playedSteps.add(key);
       }
-      if (body.stopped === true) { state.plan = undefined; state.returnPlan = undefined; state.resumePending = false; state.returnPending = false; state.returnSteps = undefined; state.returnDecision = undefined; }
+      if (body.stopped === true) { state.plan = undefined; state.returnPlan = undefined; state.resumePending = false; state.returnPending = false; state.returnSteps = undefined; state.returnDecision = undefined; state.returnPlayback = undefined; state.resumePlayback = undefined; }
       const resume = state.paused && body.paused !== true;
       state.paused = body.paused === true;
       state.inputPending = body.inputPending === true;

@@ -74,6 +74,19 @@ test('continuation distinguishes pause, detail, backchannel, correction and loca
   assert.equal(voiceIntent('停止').kind, 'stop');
 });
 
+test('explicit return phrases select the original explanation rather than expanding the local answer', () => {
+  for (const text of ['继续刚才的讲解', '请继续之前的内容。', '回到原来的话题', '接着被打断的讲解往下说', '从刚才打断的地方继续讲']) {
+    const intent = voiceIntent(text, { busy: true, paused: true });
+    assert.equal(intent.kind, 'question', text);
+    assert.equal(intent.continuation, true, text);
+    assert.equal(intent.resumeOriginal, true, text);
+    assert.equal(intent.expandPrevious, true, text);
+  }
+  for (const text of ['继续解释这个例子', '把刚才的解释详细展开', '不要继续刚才的讲解', '继续刚才的讲解，不过换成天气话题', '从头重新讲一遍']) {
+    assert.notEqual(voiceIntent(text).resumeOriginal, true, text);
+  }
+});
+
 test('delivery completes only sealed, actually played steps and never an interrupted segment', () => {
   const ledger = new DeliveryLedger();
   ledger.enqueue({ id: 'a', turn: 1, step: 1, text: '刚才这一句。' });
@@ -301,6 +314,94 @@ test('an ordinary first interruption preserves the detailed plan until the model
   h.hooks.get('agent/status')({ agent: h.agent });
   assert.equal(wakes, 1); assert.equal(state.plan, plan);
   assert.deepEqual(plan.pending().map(unit => unit.id), ['u2']); h.context.dispose();
+});
+
+test('returning by the reported phrase restores the suspended source and preserves heard progress without a branch tool decision', async () => {
+  const h = host(); h.context.install(); await h.send('start');
+  const plan = new NarrationPlan({ turn: 1, text: '# 原理\n原来的原理。\n# 限制\n原来的限制尚未验证。' }, '全部详细讲');
+  plan.cover(['u1'], '2:1'); plan.playedSteps.add('2:1');
+  plan.cover(['u2'], '2:2');
+  const state = h.context.state('s'); state.plan = plan;
+  const user = text => h.context.observe(h.session, { type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text }] } });
+  await h.send('update', { playback: { recent: '原理讲完的位置', current: '原限制被打断的位置', pending: 1, completedSteps: ['2:1'] } });
+  user('等等，这里没明白，先解释一下');
+  assert.equal(state.returnPlan, plan);
+  assert.match(h.context.context(h.agent), /挂起讲解定位/);
+  assert.match(h.context.context(h.agent), /原来的限制尚未验证/);
+  await h.send('update', { playback: { recent: '局部例子讲到这里', current: '', pending: 0, completedSteps: ['3:1'] } });
+  user('先解释这个例子');
+  assert.equal(state.returnPlayback.current, '原限制被打断的位置', 'later local turns must not overwrite the original cursor');
+  user('继续刚才的讲解');
+  assert.equal(state.plan, plan, 'must restore the original plan immediately, not extend the branch');
+  assert.equal(state.returnPlan, undefined);
+  assert.equal(state.returnDecision, undefined);
+  assert.equal(state.intent.temporary, false);
+  assert.deepEqual(plan.pending().map(unit => unit.id), ['u2']);
+  assert.equal(plan.covered.get('u1'), '2:1');
+  const prompt = h.context.context(h.agent);
+  assert.match(prompt, /明确要求接回.*原讲解/);
+  assert.match(prompt, /原来的限制尚未验证/);
+  assert.match(prompt, /原限制被打断的位置/);
+  assert.doesNotMatch(prompt, /先处理本次局部讨论/);
+  h.context.dispose();
+});
+
+test('explicit return without a retained plan does not turn the latest local explanation into the original', async () => {
+  const h = host(); await h.send('start');
+  h.session.log = [{ seq: 1, type: 'assistant/message', data: { turn: 3, step: 1, message: { content: [{ type: 'text', text: '局部解释的新例子。' }] } } }];
+  h.context.observe(h.session, { seq: 2, type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '继续刚才的讲解' }] } });
+  assert.equal(h.context.state('s').plan, undefined);
+  assert.match(h.context.context(h.agent), /当前没有保留的详细计划/);
+  assert.doesNotMatch(h.context.context(h.agent), /待解释.*局部解释的新例子/);
+  h.context.dispose();
+});
+
+test('claimed input previews the first model prompt while durable plans and playback receipts remain unchanged', async () => {
+  const h = host(); h.context.install(); await h.send('start');
+  const plan = new NarrationPlan({ text: '# 原理\n原理甲。\n# 限制\n限制乙。' }, '全部讲');
+  plan.cover(['u1'], '2:1'); plan.playedSteps.add('2:1'); plan.cover(['u2'], '2:2');
+  const state = h.context.state('s'); state.returnPlan = plan; state.returnDecision = 'wait'; state.waiting = true;
+  const message = { id: 'return-original', source: { kind: 'user' }, content: [{ type: 'text', text: '继续刚才的讲解' }] };
+  h.hooks.get('agent/inbox/claimed')({ agent: h.agent, message });
+  const prompt = h.context.context(h.agent);
+  assert.match(prompt, /明确要求接回.*原讲解/);
+  assert.match(prompt, /未确认播完 u2/);
+  assert.equal(state.plan, undefined); assert.equal(state.returnPlan, plan); assert.equal(state.waiting, true);
+  assert.deepEqual([...plan.reopened], [], 'prompt previews cannot mutate pending playback state');
+  const signal = new AbortController().signal;
+  await h.hooks.get('agent/pre-step')({ agent: h.agent, signal }, async () => ({ kind: 'enter', messages: [message] }));
+  h.context.observe(h.session, { type: 'user/message', data: message });
+  assert.equal(state.plan, plan); assert.equal(state.returnPlan, undefined); assert.equal(state.waiting, false);
+  assert.equal(state.claimed.length, 0); assert.deepEqual([...plan.reopened], ['u2']);
+  h.context.dispose();
+});
+
+test('rejected, removed or aborted inbox proposals cannot change the continuation target', async () => {
+  for (const outcome of ['reject', 'removed', 'aborted']) {
+    const h = host(); h.context.install(); await h.send('start');
+    const plan = new NarrationPlan({ text: '# 一\n原讲解。' }, '全部讲');
+    const state = h.context.state('s'); state.plan = plan;
+    const message = { id: 'proposal', source: { kind: 'user' }, content: [{ type: 'text', text: '等等，先解释一下' }] };
+    h.hooks.get('agent/inbox/claimed')({ agent: h.agent, message });
+    assert.match(h.context.context(h.agent), /挂起讲解定位/);
+    const abort = new AbortController(); if (outcome === 'aborted') abort.abort();
+    await h.hooks.get('agent/pre-step')({ agent: h.agent, signal: abort.signal }, async () => outcome === 'reject' ? { kind: 'reject' } : { kind: 'enter', messages: outcome === 'removed' ? [] : [message] });
+    assert.equal(state.plan, plan); assert.equal(state.returnPlan, undefined); assert.equal(state.claimed.length, 0);
+    assert.doesNotMatch(h.context.context(h.agent), /挂起讲解定位/);
+    h.context.dispose();
+  }
+});
+
+test('an idle transition discards uncommitted inbox previews without reviving a closed voice lease', async () => {
+  const h = host(); h.context.install(); await h.send('start');
+  const message = { id: 'proposal', source: { kind: 'user' }, content: [{ type: 'text', text: '继续刚才的讲解' }] };
+  h.hooks.get('agent/inbox/claimed')({ agent: h.agent, message });
+  assert.match(h.context.context(h.agent), /明确要求接回/);
+  h.agent.status = 'idle'; h.hooks.get('agent/status')({ agent: h.agent });
+  assert.doesNotMatch(h.context.context(h.agent), /明确要求接回/);
+  h.context.close('s'); h.hooks.get('agent/inbox/claimed')({ agent: h.agent, message });
+  assert.equal(h.context.state('s'), undefined);
+  h.context.dispose();
 });
 
 test('branch wait and abandon are scoped and cannot be overridden by later playback receipts', async () => {

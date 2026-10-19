@@ -34,7 +34,9 @@ export function voiceIntent(text, { busy = false, awaitingAnswer = false, paused
   if (/^(?:暂停|暂停一下|等一下|等一等)$/u.test(clean)) return { kind: 'pause' };
   if (/^(?:继续播放|恢复播放|接着播放)$/u.test(clean) || (paused && /^(?:继续|继续讲|接着说|接着讲)$/u.test(clean))) return { kind: 'resume' };
   if (busy && !awaitingAnswer && /^(?:嗯|嗯嗯|明白了|听懂了|知道了|好的|好|对|继续|继续讲|接着说|接着讲)$/u.test(clean)) return { kind: 'ack' };
-  const continuation = /^(?:继续|接着说|继续讲|接着讲)$/u.test(clean);
+  const resumeOriginal = /^(?:请|麻烦)?(?:继续|接着|接回|回到)(?:刚才|之前|原来|原先|被打断|打断前)的?(?:讲解|讲述|说明|内容|话题|部分|课程|回答)(?:继续)?(?:讲|说|讲解|讲下去|说下去|往下讲|往下说)?$/u.test(clean)
+    || /^(?:请|麻烦)?从(?:刚才|之前)?(?:被)?打断的(?:地方|位置)(?:继续|接着)(?:讲|说|讲解|往下讲|往下说)?$/u.test(clean);
+  const continuation = resumeOriginal || /^(?:继续|接着说|继续讲|接着讲)$/u.test(clean);
   const detailed = continuation || /(?:详细|详述|展开|讲清楚|从头讲|太少了|不够详细|全部.*(?:讲|说|解释)|完整.*(?:讲|说|解释))/u.test(clean);
   const restart = /(?:重新|从头|再).*(?:详细|完整|全部|讲一遍)/u.test(clean);
   const partial = /(?:第[一二三四五六七八九十\d]+(?:点|部分|项|个)|这个词|这个概念|刚才那句|这一点)/u.test(clean);
@@ -42,7 +44,7 @@ export function voiceIntent(text, { busy = false, awaitingAnswer = false, paused
     || /^(?:请|麻烦|把|全部|所有|内容|回答|答复|再|重新|从头|详细|地|说|讲|解释|展开|详述|完整|一遍|一下|一点|给我|清楚|都|讲解)+$/u.test(clean));
   return { kind: 'question', detailed, expandPrevious, restart, scope: partial ? 'target' : 'answer',
     temporary: partial && !/(?:不对|换个|不是|改成)/u.test(clean),
-    continuation };
+    continuation, resumeOriginal };
 }
 
 /** Model coverage claims and player receipts are deliberately separate. */

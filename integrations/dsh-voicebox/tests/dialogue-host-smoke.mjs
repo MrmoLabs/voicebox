@@ -158,6 +158,22 @@ try {
   assert.equal(script.length, 0); assert.equal(voice.state(agent.session.id).plan, plainParent);
   assert.equal(plainParent.covered.get('u1'), cost);
 
+  const explicitParent = setupParent();
+  script.push([...text('先解释局部例子：这里只说明输入转换。'), finish]);
+  await send('等等，这里没明白，先解释一下');
+  assert.equal(voice.state(agent.session.id).returnPlan, explicitParent);
+  const returnRequest = requests.length;
+  script.push(explain('u2', '接回原讲解的限制：尚未验证，不能当成已经成功。'), [...text('原限制继续说明完毕。'), finish]);
+  await send('继续刚才的讲解');
+  assert.equal(script.length, 0, 'explicit return must not need a branch tool choice');
+  assert.equal(voice.state(agent.session.id).plan, explicitParent);
+  assert.equal(voice.state(agent.session.id).returnPlan, undefined);
+  assert.equal(explicitParent.covered.get('u1'), cost);
+  const returnContext = requests[returnRequest].messages.filter(message => message.source?.kind === 'runtime-context').at(-1)?.source.sections.find(section => section.name === 'voicebox:conversation')?.text || '';
+  assert.match(returnContext, /明确要求接回.*原讲解/);
+  assert.match(returnContext, /尚未验证/);
+  assert.doesNotMatch(returnContext, /先处理本次局部讨论/);
+
   setupParent();
   script.push([...text('需要哪一种例子？'), finish]); await send('第二点详细解释');
   script.push(branch('abandon', '现在换成新问题，先讨论你的新需求。'), [...text('旧讲解不再继续。'), finish]);
