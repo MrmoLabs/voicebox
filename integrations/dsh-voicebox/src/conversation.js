@@ -38,6 +38,7 @@ export class VoiceConversation {
     const pending = this.inputPending();
     if (value.phase && value.phase !== this.state.phase) this.speaker.trace?.('input.state', { state: value.phase });
     this.state = { ...this.state, ...value }; for (const fn of this.listeners) fn();
+    this.speaker.reconcileTransitions?.();
     if (this.contextEpoch && this.state.active && pending !== this.inputPending()) void this.syncContext().catch(error => this.update({ notice: error.message }));
   }
   settings() { return { ...VOICE_DEFAULTS, ...this.form?.getSnapshot().value }; }
@@ -87,7 +88,7 @@ export class VoiceConversation {
   }
   beginCandidate() {
     if (this.candidate || !this.busy()) return;
-    const candidate = { heard: this.heard(), reference: this.speaker.state.phase === 'playing' ? this.speaker.state.playbackText : '' };
+    const candidate = { heard: this.heard(), reference: this.speaker.state.transitionPlaying ? this.speaker.state.transitionText : this.speaker.state.phase === 'playing' ? this.speaker.state.playbackText : '' };
     this.candidate = candidate;
     this.speaker.trace?.('input.candidate');
     candidate.hold = this.speaker.holdPlayback();

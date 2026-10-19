@@ -16,6 +16,7 @@ export function validateSettings(value) {
   if (!['simplified', 'original'].includes(value.recognitionScript)) throw new Error('请选择中文识别文字格式');
   if (!['fast', 'balanced', 'patient'].includes(value.patience)) throw new Error('请选择停顿耐心');
   if (typeof value.allowInterrupt !== 'boolean' || typeof value.backgroundListening !== 'boolean' || typeof value.microphoneId !== 'string' || typeof value.recognitionLanguage !== 'string') throw new Error('语音输入设置无效');
+  if (typeof value.transitionSounds !== 'boolean') throw new Error('请选择是否使用语音过渡提示');
   if (!Array.isArray(value.sessionIds) || value.sessionIds.some(id => typeof id !== 'string' || !id.trim() || id.length > 200)) throw new Error('会话白名单中存在无效 ID');
   return value;
 }

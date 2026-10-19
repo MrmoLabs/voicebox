@@ -2,6 +2,8 @@ import { SpeechBridge, spokenText } from './bridge.js';
 import { LiveNarration } from './live.js';
 import { DeliveryLedger } from './delivery.js';
 import { VoiceDiagnostics } from './telemetry.js';
+import { TransitionAudio } from './transition-audio.js';
+import { loadTransition, playTransition, transitionKey, TRANSITION_TEXT } from './transition-speech.js';
 
 /** Consume only new durable deltas; restored history is available for manual read. */
 export class ReplyObserver {
@@ -62,6 +64,19 @@ export class DesktopSpeechController {
     this.playSequence = 0;
     this.state = { enabled: false, voiceActive: false, phase: 'idle', elapsed: 0, latest: '', activeMessageId: undefined, error: '' };
     this.messages = new Map();
+    this.form = form;
+    this.transitions = new TransitionAudio({
+      eligible: purpose => this.transitionEligible(purpose),
+      load: async (kind, key, signal) => { const clip = await loadTransition(kind, key, this.sessionId, speechFetch, signal, !!form?.getSnapshot().value?.profile); this.trace('transition.cache', { state: kind }); return clip; },
+      play: async (clip, kind, signal) => {
+        const lease = Symbol('waiting speech'); this.transitionLease = lease;
+        this.trace('transition.play', { state: kind });
+        this.update({ transitionPlaying: true, transitionText: TRANSITION_TEXT[kind] });
+        try { await playTransition(this.audio, clip, signal); }
+        finally { this.trace('transition.end', { aborted: signal.aborted }); if (this.transitionLease === lease) { this.transitionLease = undefined; this.update({ transitionPlaying: false, transitionText: '' }); } }
+      },
+    });
+    this.configureTransitions();
     this.readingMode = form?.getSnapshot().value?.readingMode || 'complete';
     this.recordSettings = () => this.trace('settings.runtime', {
       modelSize: '0.6B', speechMode: 'realtime', readingMode: this.readingMode, recognitionModel: 'turbo',
@@ -72,6 +87,7 @@ export class DesktopSpeechController {
       const mode = form.getSnapshot().value?.readingMode || 'complete';
       if (mode !== this.readingMode) { this.stop(); this.readingMode = mode; }
       this.recordSettings();
+      this.configureTransitions(); this.reconcileTransitions();
     });
     this.bridge = new SpeechBridge({ endpoint: 'http://voicebox.invalid', playbackOwner: 'client', voiceContinuation: () => this.state.voiceActive }, {
       fetch: speechFetch,
@@ -86,6 +102,7 @@ export class DesktopSpeechController {
       update: values => this.update({ ...values, ...(this.userPaused && values.phase === 'buffering' ? { phase: 'paused' } : {}) }),
       failed: values => this.update(values),
       voiceMode: () => this.state.voiceActive,
+      preparing: boundary => { this.atSpeechBoundary = boundary; this.voiceAudioPending = true; this.reconcileTransitions(); },
       trace: (event, values) => this.trace(event, values),
       delivery: {
         enqueue: item => this.delivery.enqueue(item),
@@ -99,11 +116,35 @@ export class DesktopSpeechController {
   trace(event, values) { this.diagnostics.record(event, values); }
   subscribe = (listener) => { this.listeners.add(listener); return () => this.listeners.delete(listener); };
   playbackPaused() { return this.userPaused || this.playbackHolds.size > 0; }
+  configureTransitions() {
+    const settings = this.form?.getSnapshot().value || {};
+    this.transitions.configure(transitionKey(settings), settings.transitionSounds !== false && settings.recognitionLanguage === 'zh');
+  }
+  transitionEligible(purpose) {
+    if (this.disposed || !this.sessionId || this.playbackPaused() || this.conversation?.inputPending()) return false;
+    if (purpose === 'warm') {
+      const session = this.ctx.sessions.binding(this.sessionId).session.getSnapshot();
+      return (this.state.voiceActive || this.state.enabled) && this.state.phase === 'idle' && !this.transitions.active
+        && !session.running && !session.awaitingFirstTurn && !session.pendingSubmissions?.length;
+    }
+    if (!this.state.voiceActive || !this.audio?.createGain || this.audio.state !== 'running') return false;
+    return this.voiceAudioPending === true && (this.atSpeechBoundary || !this.transitions.spoke);
+  }
+  reconcileTransitions() {
+    if (!this.transitions || this.disposed) return;
+    if (this.state.phase === 'error') { this.transitions.stop(); return; }
+    if (!this.state.voiceActive) { this.transitions.stop(); this.transitions.scheduleWarm(); return; }
+    if (this.conversation?.inputPending() || this.playbackPaused()) { this.transitions.cancel(); return; }
+    if (this.state.phase === 'idle' && this.live?.finished) this.transitions.stop();
+    if (this.transitions.active) this.transitions.wait(this.atSpeechBoundary);
+    else this.transitions.scheduleWarm();
+  }
   update(values) {
     if (this.playbackPaused() && ['buffering', 'playing'].includes(values.phase)) values = { ...values, phase: 'paused' };
     if (values.phase && values.phase !== this.state.phase) this.trace('speaker.state', { state: values.phase });
     if (values.waitingForText !== undefined && values.waitingForText !== this.state.waitingForText) this.trace('text.wait', { waiting: values.waitingForText });
     this.state = { ...this.state, ...values }; for (const listener of this.listeners) listener();
+    this.reconcileTransitions();
   }
   select(id) {
     const list = this.ctx.sessions.list.getSnapshot();
@@ -128,6 +169,12 @@ export class DesktopSpeechController {
         if (event.type === 'turn/end') this.trace('turn.end');
         if (this.readingMode === 'streaming' || this.state.voiceActive) this.live.handle(session, event);
         else this.bridge.handle(session, event);
+        if (event.type === 'user/message' && this.state.voiceActive && (event.data.source?.kind === 'user'
+          || event.data.source?.kind === 'dsh-voicebox' && !this.transitions.active)) {
+          this.voiceAudioPending = true; this.atSpeechBoundary = true; this.transitions.begin();
+          if (event.data.source.kind === 'dsh-voicebox') this.transitions.spoke = true;
+          this.reconcileTransitions();
+        }
       }
     };
     const observer = new ReplyObserver(handleAuto, (latest) => this.update({ latest }), () => {
@@ -175,7 +222,11 @@ export class DesktopSpeechController {
     this.update({ enabled });
   }
   messageText(messageId) { return this.messages.get(messageId) || ''; }
-  setVoiceActive(active) { this.stop(); this.update({ voiceActive: active }); }
+  setVoiceActive(active) {
+    this.stop();
+    if (active) { this.transitions.failed = false; if (!this.form?.getSnapshot().value?.profile) this.transitions.cache.clear(); }
+    this.update({ voiceActive: active });
+  }
   read(messageId) {
     const text = messageId === undefined ? this.state.latest : this.messageText(messageId);
     if (!this.sessionId || !text) return;
@@ -186,6 +237,7 @@ export class DesktopSpeechController {
     this.bridge.track(this.bridge.speak(this.sessionId, `manual:${crypto.randomUUID()}`, text, this.bridge.epochs.get(this.sessionId)));
   }
   silence() {
+    this.transitions.stop(); this.transitionLease = undefined; this.voiceAudioPending = false; this.atSpeechBoundary = false;
     if (['buffering', 'playing', 'paused'].includes(this.state.phase)) this.trace('play.cancel');
     this.delivery.interrupt();
     this.audioEpoch++;
@@ -193,7 +245,7 @@ export class DesktopSpeechController {
     this.playAbort?.abort(); this.playAbort = undefined;
     this.userPaused = false;
     this.playbackHolds.clear();
-    this.update({ activeMessageId: undefined, activeTurn: undefined, playbackText: '', inputHeld: false, live: false, waitingForText: false, phase: 'idle', elapsed: 0, error: '' });
+    this.update({ activeMessageId: undefined, activeTurn: undefined, playbackText: '', inputHeld: false, live: false, waitingForText: false, phase: 'idle', elapsed: 0, error: '', transitionPlaying: false, transitionText: '' });
   }
   stop() {
     this.silence();
@@ -219,7 +271,7 @@ export class DesktopSpeechController {
       await this.play({ generation_id: generation.id, stream_audio: true }, 'http://voicebox.invalid', abort.signal,
         (elapsed, buffering = false) => { if (!abort.signal.aborted) { this.hasPlaybackProgress = true; this.update({ elapsed: offset + elapsed, phase: this.audio.state === 'suspended' ? 'paused' : buffering ? 'buffering' : 'playing' }); } },
         { fetch: speechFetch, context: this.audio, resume: false, initialBufferSeconds: continuation && offset > 0 ? 0.04 : 0.8,
-          trace: event => this.trace(`pcm.${event.kind}`, { ...event, piece }) });
+          trace: event => { if (event.kind === 'first') { this.voiceAudioPending = false; this.transitions.audioReady(); } this.trace(`pcm.${event.kind}`, { ...event, piece }); } });
       if (!abort.signal.aborted && !continuation) this.update({ activeMessageId: undefined, phase: 'idle', elapsed: 0 });
     } catch (error) {
       if (!abort.signal.aborted) {
@@ -235,6 +287,7 @@ export class DesktopSpeechController {
     void this.setPaused(!this.userPaused);
   }
   async setPaused(paused) {
+    this.transitions.cancel();
     if (paused !== this.userPaused) this.trace('play.pause', { paused });
     this.userPaused = paused;
     await this.syncPlaybackPause();
@@ -243,6 +296,7 @@ export class DesktopSpeechController {
   // A temporary input hold preserves scheduled nodes and the user's own pause.
   // Stop invalidates the lease, so a late ASR result cannot resume a new reply.
   holdPlayback() {
+    this.transitions.cancel();
     const lease = Symbol('voice input');
     this.playbackHolds.add(lease);
     this.trace('play.hold');
@@ -272,6 +326,7 @@ export class DesktopSpeechController {
     return this.audioTransition;
   }
   async dispose() {
+    this.disposed = true;
     this.conversation?.dispose();
     this.stop(); this.offEvents?.(); this.offSession?.(); this.offSettings?.();
     await this.bridge.dispose();

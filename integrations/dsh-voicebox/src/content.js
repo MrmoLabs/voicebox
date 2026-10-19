@@ -28,6 +28,27 @@ export function answerUnits(text) {
   return units;
 }
 
+/** Select the unconfirmed spoken tail; repeated or missing anchors never skip text. */
+export function remainingSpeech(text, playback = {}) {
+  const positions = [], compact = [];
+  for (let i = 0; i < text.length; i++) if (!/\s/u.test(text[i])) { positions.push(i); compact.push(text[i]); }
+  const source = compact.join('');
+  const unique = (value, after = 0) => {
+    const target = (value || '').replace(/\s+/gu, '');
+    if (!target) return;
+    const index = source.indexOf(target, after);
+    if (index < 0 || source.indexOf(target, index + 1) >= 0) return;
+    return { start: index, end: index + target.length };
+  };
+  const recent = unique(playback.recent);
+  const current = unique(playback.current, recent?.end || 0);
+  const offset = current ? positions[current.start] : recent ? (positions[recent.end] ?? text.length) : 0;
+  const remaining = text.slice(offset).trim();
+  const units = remaining.split(/\n+/u).filter(part => part.trim()).flatMap(part => answerUnits(part));
+  return { units: units.map((unit, index) => ({ ...unit, id: `u${index + 1}`, title: `原回答接续段 ${index + 1}` })),
+    matched: !!(current || recent), text: remaining };
+}
+
 export function voiceIntent(text, { busy = false, awaitingAnswer = false, paused = false } = {}) {
   const clean = text.trim().replace(/[。！!？?，,\s]+$/gu, '');
   if (/^(?:停止|别说了|不用了|停一下|不要继续了)$/u.test(clean)) return { kind: 'stop' };
@@ -61,6 +82,11 @@ export class NarrationPlan {
   }
   cover(ids, step) {
     if (!Array.isArray(ids) || ids.length > 200 || ids.some(id => !this.units.some(unit => unit.id === id))) throw new Error('未知的讲解单元');
+    if (this.mode === 'resume') {
+      const missing = this.pending();
+      const next = ids.filter(id => missing.some(unit => unit.id === id));
+      if (next.length > 1 || (next.length && next[0] !== missing[0].id)) throw new Error('请先接续当前提供的未播段落，不能跳到后面的段落');
+    }
     for (const id of ids) {
       if (this.playedSteps.has(this.covered.get(id))) continue;
       if (!this.covered.has(id) || this.reopened.has(id)) { this.covered.set(id, step); this.reopened.delete(id); }

@@ -173,6 +173,8 @@ export function VoiceboxSettings({ form, controller, view }) {
         <small>开口后先暂停播报，识别到新内容再取消旧回答；空识别或明确匹配的回声保留原回答。设备未确认回声消除时，播报期间使用“打断并说话”。回声判断并不可靠，建议使用耳机；已执行的工具操作不会因停止回答而撤销。</small>
         <label className="dsh-voicebox-config-check"><input type="checkbox" checked={draft.backgroundListening} onChange={event => edit('backgroundListening', event.target.checked)} />允许后台监听</label>
         <small>开启后，切换窗口仍可继续对话。关闭时，窗口失焦只暂停麦克风输入，已有播报仍会继续。结束语音会话会释放麦克风。</small>
+        <label className="dsh-voicebox-config-check"><input type="checkbox" checked={draft.transitionSounds} onChange={event => edit('transitionSounds', event.target.checked)} />语音过渡提示</label>
+        <small>中文语音等待回复时可播放“我想想”，句间等待较久时可播放“嗯”；每轮限次并保留间隔，正文和插话优先。首次使用在空闲时准备当前音色的短音频，未准备好时保持安静；缓存仅保存在本机，换音色或模型后重新准备。句子中途缺音频不会插词。</small>
       </details>
       <details><summary>连接与会话范围</summary>
         <label htmlFor="voicebox-endpoint">Voicebox 后端地址</label>

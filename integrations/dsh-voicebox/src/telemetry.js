@@ -5,10 +5,13 @@ const EVENTS = new Set([
   'pcm.first', 'pcm.started', 'pcm.underrun', 'pcm.completed', 'pcm.aborted', 'pcm.failed',
   'input.state', 'input.candidate', 'input.discarded', 'input.asr-start', 'input.asr-ready', 'input.asr-failed',
   'input.empty', 'input.echo', 'input.intent', 'input.submit', 'input.accepted', 'input.failed', 'input.signal', 'window.state',
+  'transition.cache', 'transition.play', 'transition.end',
 ]);
 const NUMBERS = ['request', 'piece', 'input', 'durationMs', 'afterMs', 'audioMs', 'sampleRate', 'gapMs', 'refillMs', 'bytes', 'characters', 'parts'];
 const BOOLEANS = ['waiting', 'paused', 'hidden', 'focused', 'aborted'];
 const STATES = {
+  'transition.cache': ['initial', 'gap'],
+  'transition.play': ['initial', 'gap'],
   'input.signal': ['missing', 'suspended', 'device-muted', 'disabled', 'blocked', 'voiced', 'quiet'],
   'speaker.state': ['idle', 'buffering', 'playing', 'paused', 'error'],
   'input.state': ['idle', 'starting', 'listening', 'capturing', 'transcribing', 'sending', 'answering', 'muted', 'background', 'error'],

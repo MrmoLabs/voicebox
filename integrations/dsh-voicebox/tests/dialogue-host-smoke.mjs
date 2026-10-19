@@ -185,13 +185,29 @@ try {
   const ordinaryParent = voice.state(agent.session.id).returnPlan;
   assert.equal(ordinaryParent.mode, 'resume');
   const ordinaryRequest = requests.length;
-  script.push(explain('u2', '接回原方案的限制：结果尚未验证。'), [...text('本次原回答接续结束。'), finish]);
+  script.push(explain('u1', '接回原方案的限制：结果尚未验证。'), [...text('本次原回答接续结束。'), finish]);
   await send('继续刚才的讲解吧');
   assert.equal(voice.state(agent.session.id).plan, ordinaryParent);
   const ordinaryContext = requests[ordinaryRequest].messages.filter(message => message.source?.kind === 'runtime-context').at(-1)?.source.sections.find(section => section.name === 'voicebox:conversation')?.text || '';
   assert.match(ordinaryContext, /接续被打断的普通回答/);
   assert.match(ordinaryContext, /讲讲方案成本和限制，简短一些/);
   assert.match(ordinaryContext, /结果尚未验证/);
+
+  Object.assign(voice.state(agent.session.id), { plan: undefined, returnPlan: undefined, returnDecision: undefined, waiting: false });
+  const prefix = '这个平台把代码托管和开发者协作联系起来。';
+  script.push([...text(`${prefix}接下来介绍仓库和协作流程。\n\n然后介绍个人用途。\n\n最后再让你选择方向。`), finish]);
+  await send('简单介绍这个平台');
+  await voice.handle(new Request('http://host', { method: 'POST', body: JSON.stringify({ action: 'update', session_id: agent.session.id, epoch: 'owner',
+    interruption: { sequence: 2, playback: { recent: prefix, current: '', pending: 4, completedSteps: [] } },
+  }) }));
+  const beforeBranch = requests.length;
+  script.push(branch('resume', '局部概念说明完毕。'), explain('u1', '接下来介绍仓库和协作流程。'), explain('u2', '然后介绍个人用途。'), explain('u3', '最后再让你选择方向。'), [...text('原回答已按顺序接续。'), finish]);
+  await send('开发者协作怎么理解');
+  const postToolContext = requests[beforeBranch + 1].messages.filter(message => message.source?.kind === 'runtime-context').at(-1)?.source.sections.find(section => section.name === 'voicebox:conversation')?.text || '';
+  assert.match(postToolContext, /待解释 u1.*接下来介绍仓库和协作流程/s);
+  assert.doesNotMatch(postToolContext, /待解释 u2|先处理本次局部讨论/);
+  assert.equal(voice.state(agent.session.id).plan.mode, 'resume');
+  assert.equal(voice.state(agent.session.id).plan.pending().length, 0);
 
   setupParent();
   script.push([...text('需要哪一种例子？'), finish]); await send('第二点详细解释');

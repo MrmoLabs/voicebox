@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { NarrationPlan, voiceIntent } from './content.js';
+import { NarrationPlan, remainingSpeech, voiceIntent } from './content.js';
 import { spokenText } from './bridge.js';
 
 const POLICY = `当前会话处于语音对话。回答正文要适合自然口头表达，同时保留可复制的表格、代码、命令和出处。
@@ -118,14 +118,16 @@ export class VoiceContext {
     if (state.returnPending && state.returnPlan) {
       if (state.returnDecision && !['auto', 'resume'].includes(state.returnDecision)) return;
       if (!state.returnSteps?.size || [...state.returnSteps].some(key => !state.returnPlan.playedSteps.has(key))) return;
-      state.plan = state.returnPlan; state.returnPlan = undefined; state.returnPending = false; state.returnSteps = undefined;
-      state.resumePlayback = state.returnPlayback; state.returnPlayback = undefined;
-      state.returnDecision = undefined;
-      state.intent = { ...state.intent, temporary: false }; state.resumePending = true;
+      this.restore(state); state.resumePending = true;
     }
     if (!state.resumePending || !state.plan) return;
     state.resumePending = false;
     if (state.plan.advance()) agent.followup(notice(`${state.plan.mode === 'resume' ? '恢复用户被打断的回答，保持原问题的详略' : '恢复用户已请求的详细讲解'}，接续未解释或未确认播完的单元，不重复已完整播放部分。`));
+  }
+  restore(state) {
+    state.plan = state.returnPlan; state.returnPlan = undefined; state.returnPending = false; state.returnSteps = undefined;
+    state.resumePlayback = state.returnPlayback; state.returnPlayback = undefined; state.returnDecision = undefined;
+    state.intent = { ...state.intent, temporary: false }; state.waiting = false;
   }
   attachTool(agent) {
     const state = this.state(agent?.session?.id);
@@ -156,6 +158,10 @@ export class VoiceContext {
         if (last?.data.turn !== state.explanationTurn || !last?.data.message.content.some(block => block.type === 'text' && block.text.trim())) throw new Error('请先给出当前轮次的可见回答');
         state.returnDecision = args.action;
         state.waiting = args.action === 'wait';
+        // Ordinary replies already have a known unplayed source. Select that
+        // source before the model's post-tool step, rather than let it keep
+        // answering the local discussion and wait for a later follow-up.
+        if (args.action === 'resume' && state.returnPlan.mode === 'resume') this.restore(state);
         if (args.action === 'abandon') {
           state.returnPlan = undefined; state.returnPending = false; state.returnSteps = undefined;
           state.returnPlayback = undefined;
@@ -172,7 +178,9 @@ export class VoiceContext {
     if (event.type === 'turn/start') state.explanationTurn = event.data.turn;
     if (event.type === 'assistant/message' && !event.data.interrupted) {
       const text = (event.data.message.content || []).filter(block => block.type === 'text').map(block => block.text).join('\n').trim();
-      state.waiting = state.returnDecision === 'wait' || /[？?]\s*$|(?:吗|呢)[。！]?\s*$/u.test(text) && !/(?:要不要继续|是否继续|继续吗)/u.test(text);
+      const current = state.plan?.mode === 'resume' && state.plan.pending()[0];
+      const canWait = !current || /[？?]\s*$|(?:吗|呢)[。！]?\s*$/u.test(current.text);
+      state.waiting = state.returnDecision === 'wait' || canWait && /[？?]\s*$|(?:吗|呢)[。！]?\s*$/u.test(text) && !/(?:要不要继续|是否继续|继续吗)/u.test(text);
       if (text) state.artifactGap = !spokenText(text.replace(/^\s{0,3}#{1,6}\s+.*$/gm, '')).trim();
       if (state.returnPlan && text && !state.artifactGap) state.returnSteps?.add(`${event.data.turn}:${event.data.step ?? 0}`);
     }
@@ -191,6 +199,8 @@ export class VoiceContext {
     if (!parent && interruption && previous?.text && intent.kind === 'question' && !intent.continuation && !intent.restart && !intent.expandPrevious) {
       parent = new NarrationPlan(previous, previous.request || state.lastRequest || '接续原问题');
       parent.mode = 'resume';
+      const remaining = remainingSpeech(spokenText(previous.text), interruption.playback);
+      parent.units = remaining.units; parent.cursorMatched = remaining.matched;
     }
     const continuing = intent.continuation && parent;
     // A first interruption need not contain an ordinal or other local-topic
@@ -248,7 +258,8 @@ export class VoiceContext {
       parts.push(`内部单元记录（模型登记不证明解释完整正确，回执不证明用户听清）：${plan.units.map(unit => `${unit.id} ${plan.playedSteps.has(plan.covered.get(unit.id)) ? '有完整播放回执' : plan.covered.has(unit.id) ? '模型已登记解释，未确认完整播放' : '尚未登记解释'}`).join('；')}。`);
       if (plan.pending().some(unit => plan.reopened.has(unit.id))) parts.push('部分单元此前已经写出解释，但未确认完整播完。参考实际播放位置接续，必要时简短回顾；不能声称用户完整听过，也不要重头重复整篇。');
       if (plan.complete() && state.intent?.continuation) parts.push('原详细计划已完整播放。根据用户当前的继续请求推进相关内容，不要重头重复原计划；没有后续材料时如实说明。');
-      for (const unit of plan.pending().slice(0, 6)) parts.push(`${plan.reopened.has(unit.id) ? '未确认播完' : '待解释'} ${unit.id} ${unit.title}：\n${unit.text.slice(0, 16000)}${unit.text.length > 16000 ? '\n[本单元原文较长，此处为节选；完整原文在会话记录中，不可声称已完整提供。]' : ''}`);
+      if (plan.mode === 'resume' && plan.pending().length) parts.push('从下面当前未播段落开始接续，按原顺序讲完，再进入后面的段落。不能直接跳到原答复末尾的选择题、总结或询问方向。当前只提供一个段落；登记它之后再提供下一段。');
+      for (const unit of plan.pending().slice(0, plan.mode === 'resume' ? 1 : 6)) parts.push(`${plan.reopened.has(unit.id) ? '未确认播完' : '待解释'} ${unit.id} ${unit.title}：\n${unit.text.slice(0, 16000)}${unit.text.length > 16000 ? '\n[本单元原文较长，此处为节选；完整原文在会话记录中，不可声称已完整提供。]' : ''}`);
       parts.push(`按这些单元${plan.mode === 'resume' ? '接续原回答' : '连续详细解释'}，每完成一个或几个章节调用 voicebox_progress(covered=[对应ID])，仅登记已在可见正文解释的内容；不要先调用工具再省去解释。未列出的剩余单元将在下一步提供。`);
       if (plan.stalled >= 2 || plan.rounds >= 8) parts.push('自动补充已达到无进展或轮次保护，计划仍未完整，不得宣称全部讲完。');
     }

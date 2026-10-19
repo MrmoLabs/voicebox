@@ -2,8 +2,8 @@ import { SentenceBuffer, SentenceQueue } from './sentences.js';
 
 /** Live attempt/turn ownership sits above the existing scoped speech transport. */
 export class LiveNarration {
-  constructor(bridge, { play, update, failed, delivery, trace = () => {}, voiceMode = () => false }) {
-    Object.assign(this, { bridge, play, update, failed, delivery, trace, voiceMode });
+  constructor(bridge, { play, update, failed, delivery, preparing, trace = () => {}, voiceMode = () => false }) {
+    Object.assign(this, { bridge, play, update, failed, delivery, preparing, trace, voiceMode });
   }
   reset() { this.queue?.cancel(); this.queue = undefined; this.attempt = undefined; this.blocked = undefined; this.finished = false; this.messageId = undefined; }
   fail(session, turn, error) {
@@ -105,6 +105,7 @@ export class LiveNarration {
       queued: item => this.delivery?.enqueue(item),
       playing: item => this.delivery?.playing(item),
       played: item => this.delivery?.played(item),
+      preparing: previous => this.preparing?.(!previous || /[。！？!?；;][”’」』）)]*$/u.test(previous.text)),
       prepare: item => {
         if (this.queue !== queue) return;
         this.trace('text.queued', { characters: item.text.length, parts: item.parts?.length || 1 });
@@ -112,7 +113,7 @@ export class LiveNarration {
         return this.bridge.speak(session.id, item.id, item.text, epoch, { notify: false });
       },
       play: generation => this.play(generation),
-      waiting: () => { if (this.queue === queue) this.update({ waitingForText: true, phase: 'buffering' }); },
+      waiting: () => { if (this.queue === queue) { this.preparing?.(!queue.lastPlayed || /[。！？!?；;][”’」』）)]*$/u.test(queue.lastPlayed.text)); this.update({ waitingForText: true, phase: 'buffering' }); } },
       drained: () => { if (this.queue === queue) this.update({ activeMessageId: undefined, activeTurn: undefined, phase: 'idle', elapsed: 0 }); },
       error: error => { if (this.queue === queue) this.fail(session, turn, error); },
     });

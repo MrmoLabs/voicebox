@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { answerUnits, NarrationPlan, voiceIntent } from '../src/content.js';
+import { answerUnits, NarrationPlan, remainingSpeech, voiceIntent } from '../src/content.js';
 import { DeliveryLedger } from '../src/delivery.js';
 import { UtteranceDetector, encodeWav, audioBase64 } from '../src/capture.js';
 import { SILENCE_MS } from '../src/voice-config.js';
@@ -429,6 +429,40 @@ test('ordinary speech interruptions retain the original question and cursor with
   assert.match(prompt, /尚未验证/);
   assert.doesNotMatch(prompt, /用户要求详细展开上一答复/);
   h.context.dispose();
+});
+
+test('ordinary return selects the unheard paragraphs before the post-tool model step instead of jumping to the ending question', async () => {
+  const h = host(); h.context.install(); await h.send('start');
+  const intro = 'GitHub 本质上就是“基于 Git 的代码托管平台加开发者社交网络”。';
+  const source = `${intro}后面还有仓库和协作流程的说明。\n\n接着介绍个人用途。\n\n最后再问你想从哪个方向聊？`;
+  h.session.log = [{ seq: 1, type: 'assistant/message', data: { turn: 1, step: 1, message: { content: [{ type: 'text', text: source }] } } }];
+  await h.send('update', { interruption: { sequence: 1, playback: { recent: intro, current: '', pending: 3, completedSteps: [] } } });
+  h.context.observe(h.session, { seq: 2, type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '开发者社交网络怎么理解？' }] } });
+  h.context.observe(h.session, { type: 'turn/start', data: { turn: 2 } });
+  const event = { type: 'assistant/message', data: { turn: 2, step: 1, message: { content: [{ type: 'text', text: '先解释社交网络这个概念。' }] } } };
+  h.session.log.push(event); h.context.observe(h.session, event);
+  const parent = h.context.state('s').returnPlan;
+  assert.deepEqual(parent.units.map(unit => unit.text), ['后面还有仓库和协作流程的说明。', '接着介绍个人用途。', '最后再问你想从哪个方向聊？']);
+  await h.tools.get('voicebox_branch').execute({ action: 'resume' }, { agent: h.agent });
+  assert.equal(h.context.state('s').plan, parent); assert.equal(h.context.state('s').returnPlan, undefined);
+  const prompt = h.context.context(h.agent);
+  assert.match(prompt, /待解释 u1.*后面还有仓库和协作流程/s);
+  assert.doesNotMatch(prompt, /待解释 u2|最后再问你想从哪个方向聊/);
+  assert.throws(() => parent.cover(['u3'], '2:2'), /不能跳到/);
+  h.context.observe(h.session, { type: 'assistant/message', data: { turn: 2, step: 2, message: { content: [{ type: 'text', text: '你想从哪个方向聊？' }] } } });
+  assert.equal(h.context.state('s').waiting, false, 'a premature ending question cannot suppress the missing original content');
+  parent.cover(['u1'], '2:2');
+  assert.match(h.context.context(h.agent), /待解释 u2.*接着介绍个人用途/s);
+  h.context.dispose();
+});
+
+test('speech anchors retain an unfinished batch and remain conservative for missing or repeated text', () => {
+  const source = '开头。\n尚未完整播出的片段。\n后面的内容。';
+  const selected = remainingSpeech(source, { recent: '开头。', current: '尚未完整播出的片段。' });
+  assert.equal(selected.matched, true); assert.equal(selected.units[0].text, '尚未完整播出的片段。');
+  assert.equal(remainingSpeech('重复。重复。后文。', { recent: '重复。' }).text, '重复。重复。后文。');
+  assert.equal(remainingSpeech(source, { current: '不属于原答复' }).text, source);
+  assert.equal(remainingSpeech('甲。\n乙。', { recent: '甲。', current: '乙。' }).text, '乙。');
 });
 
 test('interruption positions reject malformed metadata and stop discards the pending target', async () => {

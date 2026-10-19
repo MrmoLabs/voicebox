@@ -93,8 +93,8 @@ export class SentenceBuffer {
 
 /** One playing job + one prepared job; at most eight bounded text batches. */
 export class SentenceQueue {
-  constructor({ prepare, play, waiting, drained, error, longForm = false, queued, playing, played }) {
-    Object.assign(this, { prepare, play, waiting, drained, error, longForm, queued, playing, played });
+  constructor({ prepare, play, waiting, drained, error, longForm = false, queued, playing, played, preparing }) {
+    Object.assign(this, { prepare, play, waiting, drained, error, longForm, queued, playing, played, preparing });
     this.pending = []; this.closed = false; this.cancelled = false; this.characters = 0;
   }
   enqueue(text, id, meta = {}) {
@@ -128,6 +128,7 @@ export class SentenceQueue {
     this.runner = (async () => {
       try {
         while (!this.cancelled && this.next) {
+          this.preparing?.(this.lastPlayed);
           const result = await this.next;
           this.next = undefined;
           if (this.cancelled) return;
@@ -136,7 +137,7 @@ export class SentenceQueue {
           this.prime();
           this.playing?.(result.item);
           await this.play(result.value);
-          if (!this.cancelled) this.played?.(result.item);
+          if (!this.cancelled) { this.lastPlayed = result.item; this.played?.(result.item); }
         }
       } catch (error) {
         if (!this.cancelled) { this.cancel(); this.error(error); }

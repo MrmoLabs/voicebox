@@ -10,8 +10,9 @@ test('configuration is saved atomically at the editing revision; stale rejection
   let snapshot = { status: 'ready', value: settings };
   const form = { async mutate(ops, revision) {
     assert.equal(revision, 5);
-    assert.equal(ops.length, 15);
+    assert.equal(ops.length, 16);
     assert.equal(ops.find(op => op.path[0] === 'modelSize').value, '1.7B');
+    assert.equal(ops.find(op => op.path[0] === 'transitionSounds').value, true);
   }, getSnapshot: () => snapshot };
   await saveSettings(form, settings, 5);
   snapshot = { status: 'ready', value: { ...settings, profile: 'newer-edit' } };

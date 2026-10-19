@@ -19,6 +19,7 @@ export const Config = Schema.object({
   patience: Schema.union(['fast', 'balanced', 'patient']).default('balanced').description('等待说完的耐心'),
   allowInterrupt: Schema.boolean().default(false).description('允许说话打断；实验功能，建议佩戴耳机'),
   backgroundListening: Schema.boolean().default(true).description('语音对话期间允许后台监听'),
+  transitionSounds: Schema.boolean().default(true).description('等待回复或句间等待时使用缓存的语音过渡提示'),
   sessionIds: Schema.array(Schema.string()).default([]).description('允许播报的会话 ID；留空允许全部普通会话'),
 }).volatile();
 
