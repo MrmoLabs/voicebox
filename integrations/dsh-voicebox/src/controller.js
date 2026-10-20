@@ -130,13 +130,13 @@ export class DesktopSpeechController {
       return (this.state.voiceActive || this.state.enabled) && this.state.phase === 'idle' && !this.transitions.active
         && !session.running && !session.awaitingFirstTurn && !session.pendingSubmissions?.length;
     }
-    if (!this.state.voiceActive || !this.audio?.createGain || this.audio.state !== 'running') return false;
+    if ((!this.state.voiceActive && !this.state.enabled) || !this.audio?.createGain || this.audio.state !== 'running') return false;
     return this.voiceAudioPending === true && (this.atSpeechBoundary || !this.transitions.spoke);
   }
   reconcileTransitions() {
     if (!this.transitions || this.disposed) return;
     if (this.state.phase === 'error') { this.transitions.stop(); return; }
-    if (!this.state.voiceActive) { this.transitions.stop(); this.transitions.scheduleWarm(); return; }
+    if (!this.state.voiceActive && !this.state.enabled) { this.transitions.stop(); return; }
     if (this.conversation?.inputPending() || this.playbackPaused()) { this.transitions.cancel(); return; }
     if (this.state.phase === 'idle' && this.live?.finished) this.transitions.stop();
     if (this.transitions.active) this.transitions.wait(this.atSpeechBoundary);
@@ -173,8 +173,8 @@ export class DesktopSpeechController {
         if (event.type === 'turn/end') this.trace('turn.end');
         if (this.readingMode === 'streaming' || this.state.voiceActive) this.live.handle(session, event);
         else this.bridge.handle(session, event);
-        if (event.type === 'user/message' && this.state.voiceActive && (event.data.source?.kind === 'user'
-          || event.data.source?.kind === 'dsh-voicebox' && !this.transitions.active)) {
+        if (event.type === 'user/message' && (event.data.source?.kind === 'user'
+          || event.data.source?.kind === 'dsh-voicebox' && this.state.voiceActive && !this.transitions.active)) {
           this.voiceAudioPending = true; this.atSpeechBoundary = true; this.transitions.begin();
           if (event.data.source.kind === 'dsh-voicebox') this.transitions.spoke = true;
           this.reconcileTransitions();

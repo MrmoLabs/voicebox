@@ -139,7 +139,7 @@ test('clause punctuation permits a cached bridge while a hard text cut does not'
   }
 });
 
-test('the production controller warms idle audio, yields hints to PCM and input, and never counts a hint as delivered content', async t => {
+for (const voiceActive of [true, false]) test(`the production controller bridges ${voiceActive ? 'voice conversation' : 'automatic reading'} without cutting off on first PCM or counting hints as content`, async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   storage(t); localStorage.setItem('dsh-voicebox:s', 'on');
   const priorAudio = globalThis.AudioContext, priorTransport = globalThis.__DSH_TRANSPORT__;
@@ -179,7 +179,7 @@ test('the production controller warms idle audio, yields hints to PCM and input,
   t.mock.timers.tick(500); await tick();
   assert.equal(controller.transitions.cache.size, 2);
   controller.conversation = { inputPending: () => pendingInput, generating: () => session.getSnapshot().running, end() {}, dispose() {} };
-  controller.setVoiceActive(true); controller.transitions.delay = 30; controller.transitions.cooldown = 0;
+  controller.setVoiceActive(voiceActive); controller.transitions.delay = 30; controller.transitions.cooldown = 0;
   let seq = 0, revision = 0; const entries = [];
   const emit = (type, data) => { const entry = { type: 'event', event: { type, data, seq: ++seq } }; entries.push(entry); source.set({ revision: ++revision, entries: [...entries], change: { kind: 'append', entries: [entry] } }); };
   session.set({ ...session.getSnapshot(), running: true });
