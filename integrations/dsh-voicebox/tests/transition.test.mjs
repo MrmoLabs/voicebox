@@ -96,6 +96,27 @@ test('cached hint nodes share the granted context and release even when pause pr
   assert.equal(started, 1); assert.equal(disconnected, 2);
 });
 
+test('unexpected context closure releases a waiting cue; ordinary suspension preserves it', async () => {
+  const context = new EventTarget();
+  let disconnected = 0, node;
+  Object.assign(context, { state: 'running', currentTime: 1, destination: {},
+    createBuffer: (_channels, count) => ({ getChannelData: () => new Float32Array(count) }),
+    createBufferSource: () => { node = { connect() {}, start() {}, stop() {}, disconnect() { disconnected++; } }; return node; },
+    createGain: () => ({ connect() {}, disconnect() { disconnected++; }, gain: { value: .8, setValueAtTime() {}, linearRampToValueAtTime() {}, cancelScheduledValues() {} } }),
+  });
+  const abort = new AbortController(); let settled = false;
+  const playing = playTransition(context, { rate: 8000, samples: new Float32Array(1600) }, abort.signal).then(() => { settled = true; });
+  try {
+    context.state = 'suspended'; context.dispatchEvent(new Event('statechange')); await tick();
+    assert.equal(settled, false, 'suspension must not discard the pending cue or force a resume');
+    context.state = 'closed'; context.dispatchEvent(new Event('statechange')); await tick();
+    assert.equal(settled, true, 'context closure must settle without waiting for onended or user cancellation');
+    assert.equal(disconnected, 2); assert.equal(node.onended, null);
+    context.dispatchEvent(new Event('statechange')); abort.abort(); await playing;
+    assert.equal(disconnected, 2, 'late closure and cancellation must not clean up twice');
+  } finally { abort.abort(); }
+});
+
 test('waiting boundaries are published only after the preceding answer audio has finished', async () => {
   const boundaries = []; let release;
   const queue = new SentenceQueue({ prepare: async item => item,

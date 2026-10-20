@@ -89,7 +89,13 @@ export function playTransition(context, clip, signal) {
     const node = context.createBufferSource(), gain = context.createGain();
     node.buffer = buffer; node.connect(gain); gain.connect(context.destination);
     let finished = false, stopTimer;
-    const finish = () => { if (finished) return; finished = true; clearTimeout(stopTimer); signal.removeEventListener('abort', abort); node.onended = null; node.disconnect(); gain.disconnect(); resolve(); };
+    const finish = () => { if (finished) return; finished = true; clearTimeout(stopTimer); signal.removeEventListener('abort', abort); context.removeEventListener?.('statechange', stateChanged); node.onended = null; node.disconnect(); gain.disconnect(); resolve(); };
+    const stateChanged = () => {
+      if (context.state !== 'closed') return;
+      // Closing Web Audio does not guarantee a source's ended event.
+      try { node.stop(); } catch { /* The closed context may have stopped it already. */ }
+      finish();
+    };
     const abort = () => {
       const now = context.currentTime;
       gain.gain.cancelScheduledValues(now); gain.gain.setValueAtTime(gain.gain.value, now); gain.gain.linearRampToValueAtTime(0, now + .02);
@@ -97,7 +103,7 @@ export function playTransition(context, clip, signal) {
       // Wall-clock cleanup also covers a context suspended immediately after abort.
       stopTimer = setTimeout(() => { try { node.stop(); } catch { /* already ended */ } finish(); }, 25);
     };
-    signal.addEventListener('abort', abort, { once: true }); node.onended = finish;
+    signal.addEventListener('abort', abort, { once: true }); context.addEventListener?.('statechange', stateChanged); node.onended = finish;
     gain.gain.setValueAtTime(0, context.currentTime); gain.gain.linearRampToValueAtTime(.8, context.currentTime + .025);
     node.start();
   });

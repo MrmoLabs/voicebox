@@ -4,6 +4,9 @@
 <button id="run">运行七项检查</button><pre id="result">尚未运行</pre>
 <h2>播放故障检查</h2><p>此组须使用 Bun 启动验收服务。只播放全零 PCM，验证上下文关闭、暂停恢复及异常清理。</p>
 <button id="playback">运行四项播放检查</button><pre id="playback-result">尚未运行</pre>
+<h2>过渡音故障检查</h2><p>同样只使用全零音频，检查真实音频上下文中的正常收尾、关闭、暂停恢复和取消，不调用语音服务或模型。</p>
+<button id="transition">运行六项过渡音检查</button><pre id="transition-result">尚未运行</pre>
+<script type="module" src="/transition-check.js"></script>
 <script type="module">
 import { openMicrophone } from '/capture.js';
 const assert = (value, message) => { if (!value) throw Error(message); };
