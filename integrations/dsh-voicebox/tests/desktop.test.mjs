@@ -51,8 +51,10 @@ test('input pause leases span PCM pieces, preserve user pause and cannot resume 
   const second = controller.playGeneration({ id: 'two', text: '这是下一个短句。' }, true);
   await tick();
   assert.equal(plays.length, 2); assert.equal(plays[1].options.resume, false);
-  assert.equal(plays[0].options.initialBufferSeconds, 0.8);
+  assert.equal(plays[0].options.initialBufferSeconds, 0.04);
+  assert.equal(plays[0].options.bufferedStartSeconds, 0.8);
   assert.equal(plays[1].options.initialBufferSeconds, 0.04);
+  assert.equal(plays[1].options.bufferedStartSeconds, 0.6);
   assert.equal(controller.state.phase, 'paused'); assert.equal(controller.state.elapsed, 1200);
   hold.release(); await tick(); assert.equal(controller.audio.state, 'running');
   controller.pause(); await tick();

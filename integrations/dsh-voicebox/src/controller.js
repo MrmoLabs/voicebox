@@ -4,6 +4,7 @@ import { DeliveryLedger } from './delivery.js';
 import { VoiceDiagnostics } from './telemetry.js';
 import { TransitionAudio } from './transition-audio.js';
 import { loadTransition, playTransition, transitionKey, TRANSITION_TEXT } from './transition-speech.js';
+import { VOICE_DEFAULTS } from './voice-config.js';
 
 /** Consume only new durable deltas; restored history is available for manual read. */
 export class ReplyObserver {
@@ -117,8 +118,10 @@ export class DesktopSpeechController {
   subscribe = (listener) => { this.listeners.add(listener); return () => this.listeners.delete(listener); };
   playbackPaused() { return this.userPaused || this.playbackHolds.size > 0; }
   configureTransitions() {
-    const settings = this.form?.getSnapshot().value || {};
-    this.transitions.configure(transitionKey(settings), settings.transitionSounds !== false && settings.recognitionLanguage === 'zh');
+    const settings = { ...VOICE_DEFAULTS, ...this.form?.getSnapshot().value };
+    const key = transitionKey(settings);
+    if (this.transitions.key !== key) this.streamReserveSeconds = .6;
+    this.transitions.configure(key, settings.transitionSounds !== false && settings.recognitionLanguage === 'zh');
   }
   transitionEligible(purpose) {
     if (this.disposed || !this.sessionId || this.playbackPaused() || this.conversation?.inputPending()) return false;
@@ -154,6 +157,7 @@ export class DesktopSpeechController {
     this.stop();
     this.offEvents?.(); this.offSession?.();
     this.sessionId = id;
+    this.streamReserveSeconds = .6;
     this.delivery.reset();
     this.messages.clear();
     this.update({ latest: '', enabled: id ? localStorage.getItem(`dsh-voicebox:${id}`) === 'on' : false });
@@ -259,6 +263,8 @@ export class DesktopSpeechController {
     const piece = ++this.playSequence;
     this.trace('play.request', { piece });
     const offset = continuation ? this.state.elapsed : 0;
+    const reserve = Math.max(this.streamReserveSeconds, continuation && offset > 0 ? .6 : .8);
+    let starved = false;
     this.hasPlaybackProgress = false;
     this.update({ phase: this.playbackPaused() ? 'paused' : 'buffering', waitingForText: false, playbackText: generation.text || '' });
     try {
@@ -270,8 +276,13 @@ export class DesktopSpeechController {
       if (this.audio.state !== 'running' && !this.playbackPaused()) throw new Error('请点击回复下方的“朗读”启用音频播放');
       await this.play({ generation_id: generation.id, stream_audio: true }, 'http://voicebox.invalid', abort.signal,
         (elapsed, buffering = false) => { if (!abort.signal.aborted) { this.hasPlaybackProgress = true; this.update({ elapsed: offset + elapsed, phase: this.audio.state === 'suspended' ? 'paused' : buffering ? 'buffering' : 'playing' }); } },
-        { fetch: speechFetch, context: this.audio, resume: false, initialBufferSeconds: continuation && offset > 0 ? 0.04 : 0.8,
-          trace: event => { if (event.kind === 'first') { this.voiceAudioPending = false; this.transitions.audioReady(); } this.trace(`pcm.${event.kind}`, { ...event, piece }); } });
+        { fetch: speechFetch, context: this.audio, resume: false, initialBufferSeconds: .04, bufferedStartSeconds: reserve,
+          trace: event => {
+            if (event.kind === 'ready') { this.voiceAudioPending = false; this.atSpeechBoundary = false; this.transitions.audioReady(); }
+            if (event.kind === 'underrun') { starved = true; this.streamReserveSeconds = Math.min(2.4, Math.max(reserve * 1.5, event.gapMs / 1000 + .3)); }
+            this.trace(`pcm.${event.kind}`, { ...event, piece });
+          } });
+      if (!abort.signal.aborted && !starved) this.streamReserveSeconds = Math.max(.6, this.streamReserveSeconds - .1);
       if (!abort.signal.aborted && !continuation) this.update({ activeMessageId: undefined, phase: 'idle', elapsed: 0 });
     } catch (error) {
       if (!abort.signal.aborted) {

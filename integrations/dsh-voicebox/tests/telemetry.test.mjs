@@ -61,6 +61,7 @@ test('controller combines PCM and state events while excluding generation text a
   globalThis.AudioContext = class { state = 'running'; async close() { this.state = 'closed'; } };
   const controller = new DesktopSpeechController({}, async (_job, _base, _signal, update, options) => {
     options.trace({ kind: 'first', afterMs: 32, sampleRate: 24000, text: 'PRIVATE_AUDIO' });
+    options.trace({ kind: 'ready', afterMs: 90, bufferedMs: 800, text: 'PRIVATE_AUDIO' });
     options.trace({ kind: 'started', afterMs: 100 }); update(120, false);
     options.trace({ kind: 'underrun', gapMs: 450, refillMs: 300 }); update(120, true);
     options.trace({ kind: 'completed', afterMs: 1000, audioMs: 400 });
@@ -69,6 +70,8 @@ test('controller combines PCM and state events while excluding generation text a
   const result = controller.diagnostics.snapshot();
   assert.equal(result.counts['pcm.first'], 1); assert.equal(result.counts['pcm.underrun'], 1); assert.equal(result.counts['pcm.completed'], 1);
   assert.equal(result.events.find(event => event.event === 'pcm.first').piece, 1);
+  assert.equal(result.events.find(event => event.event === 'pcm.ready').bufferedMs, 800);
+  assert(controller.streamReserveSeconds >= 1.2, 'a real underrun raises the next segment reserve');
   assert.deepEqual(result.events.filter(event => event.event === 'speaker.state').map(event => event.state), ['buffering', 'playing', 'buffering', 'idle']);
   assert(!JSON.stringify(result).includes('PRIVATE'));
   await controller.dispose(); assert.equal(controller.diagnostics.snapshot().retained, 0);

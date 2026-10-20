@@ -7,6 +7,7 @@ if (process.argv[2] !== '--serve') throw new Error('Usage: node tests/capture-br
 const output = new URL('../../../release/self-check/capture-browser/result.json', import.meta.url);
 const playbackOutput = new URL('../../../release/self-check/playback-browser/result.json', import.meta.url);
 const transitionOutput = new URL('../../../release/self-check/transition-browser/result.json', import.meta.url);
+const continuityOutput = new URL('../../../release/self-check/continuity-browser/result.json', import.meta.url);
 const routes = new Map([
   ['/', new URL('./capture-browser-smoke.html', import.meta.url)],
   ['/capture.js', new URL('../src/capture.js', import.meta.url)],
@@ -14,13 +15,14 @@ const routes = new Map([
   ['/input-signal.js', new URL('../src/input-signal.js', import.meta.url)],
   ['/telemetry.js', new URL('../src/telemetry.js', import.meta.url)],
   ['/transition-check.js', new URL('./transition-browser-smoke.js', import.meta.url)],
+  ['/continuity-check.js', new URL('./continuity-browser-smoke.js', import.meta.url)],
 ]);
 const server = createServer(async (req, res) => {
   try {
-    if (req.method === 'POST' && ['/result', '/playback-result', '/transition-result'].includes(req.url) && req.headers.origin === 'http://127.0.0.1:17782') {
+    if (req.method === 'POST' && ['/result', '/playback-result', '/transition-result', '/continuity-result'].includes(req.url) && req.headers.origin === 'http://127.0.0.1:17782') {
       let body = ''; for await (const bytes of req) { body += bytes; if (body.length > 32000) throw new Error('Result too large'); }
       const result = JSON.parse(body);
-      const destination = req.url === '/result' ? output : req.url === '/playback-result' ? playbackOutput : transitionOutput;
+      const destination = new Map([['/result', output], ['/playback-result', playbackOutput], ['/transition-result', transitionOutput], ['/continuity-result', continuityOutput]]).get(req.url);
       await mkdir(new URL('./', destination), { recursive: true });
       await writeFile(destination, `${JSON.stringify(result, null, 2)}\n`, 'utf8');
       res.end('saved'); return;

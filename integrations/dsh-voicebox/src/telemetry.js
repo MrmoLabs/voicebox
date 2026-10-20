@@ -2,12 +2,12 @@ const EVENTS = new Set([
   'settings.runtime', 'call.start', 'call.end', 'session.changed', 'turn.start', 'turn.end', 'text.first', 'text.queued', 'text.wait',
   'speaker.state', 'play.pause', 'play.cancel', 'play.request', 'play.hold', 'play.release',
   'speech.request', 'speech.ready', 'speech.failed', 'speech.cancel', 'speech.cancelled', 'speech.cancel-failed',
-  'pcm.first', 'pcm.started', 'pcm.underrun', 'pcm.completed', 'pcm.aborted', 'pcm.failed',
+  'pcm.first', 'pcm.ready', 'pcm.started', 'pcm.underrun', 'pcm.completed', 'pcm.aborted', 'pcm.failed',
   'input.state', 'input.candidate', 'input.discarded', 'input.asr-start', 'input.asr-ready', 'input.asr-failed',
   'input.empty', 'input.echo', 'input.intent', 'input.submit', 'input.accepted', 'input.failed', 'input.signal', 'window.state',
   'transition.cache', 'transition.play', 'transition.end',
 ]);
-const NUMBERS = ['request', 'piece', 'input', 'durationMs', 'afterMs', 'audioMs', 'sampleRate', 'gapMs', 'refillMs', 'bytes', 'characters', 'parts'];
+const NUMBERS = ['request', 'piece', 'input', 'durationMs', 'afterMs', 'audioMs', 'bufferedMs', 'sampleRate', 'gapMs', 'refillMs', 'bytes', 'characters', 'parts'];
 const BOOLEANS = ['waiting', 'paused', 'hidden', 'focused', 'aborted'];
 const STATES = {
   'transition.cache': ['initial', 'gap'],

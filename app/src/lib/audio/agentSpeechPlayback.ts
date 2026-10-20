@@ -21,8 +21,9 @@ function interruptible<T>(task: Promise<T>, signal: AbortSignal): Promise<T> {
 
 export type SpeechPlaybackTrace =
   | { kind: 'first'; afterMs: number; sampleRate: number }
+  | { kind: 'ready'; afterMs: number; bufferedMs: number }
   | { kind: 'started' | 'aborted'; afterMs: number }
-  | { kind: 'underrun'; gapMs: number; refillMs: number }
+  | { kind: 'underrun'; gapMs: number; refillMs: number; bufferedMs?: number }
   | { kind: 'completed'; afterMs: number; audioMs: number }
   | { kind: 'failed'; afterMs: number; state: 'connect' | 'read' | 'decode' | 'schedule' | 'drain' };
 
@@ -50,7 +51,7 @@ function nextAudio(reader: ReadableStreamDefaultReader<Uint8Array>, signal: Abor
 export async function playAgentSpeech(
   job: AgentSpeechJob, baseUrl: string, signal: AbortSignal,
   update: (elapsedMs: number, buffering?: boolean) => void,
-  options: { fetch?: typeof fetch; context?: AudioContext; resume?: boolean; initialBufferSeconds?: number; trace?: (event: SpeechPlaybackTrace) => void } = {},
+  options: { fetch?: typeof fetch; context?: AudioContext; resume?: boolean; initialBufferSeconds?: number; bufferedStartSeconds?: number; trace?: (event: SpeechPlaybackTrace) => void } = {},
 ) {
   const id = encodeURIComponent(job.generation_id);
   if (!job.stream_audio) {
@@ -115,14 +116,16 @@ export async function playAgentSpeech(
       const next = timeline[0];
       update(1000 * (played + (next ? Math.max(0, Math.min(now - next.start, next.duration)) : 0)), !next || now < next.start);
     }, 100);
-    while (!playbackSignal.aborted) {
-      stage = 'read';
-      const { value, done } = await nextAudio(reader, playbackSignal);
-      checkContext();
-      if (done) break;
-      stage = 'decode';
-      for (const packet of decoder.push(value)) {
-        if (!firstPcm) { firstPcm = true; trace({ kind: 'first', afterMs: performance.now() - startedAt, sampleRate: packet.sampleRate }); }
+    // Opt-in actual PCM reserve. The legacy scheduling lead is unchanged for
+    // other clients; a lead alone cannot protect against a late second packet.
+    const reserve = Number.isFinite(options.bufferedStartSeconds) ? Math.max(0, Math.min(3, options.bufferedStartSeconds!)) : 0;
+    let pending: ReturnType<PcmPacketDecoder['push']> = [], pendingSeconds = 0, refilling = false;
+    const flush = async (complete = false) => {
+      if (!pending.length || ((!first || refilling) && pendingSeconds + 1e-6 < reserve && !complete)) return;
+      const bufferedMs = Math.round(pendingSeconds * 1000);
+      if (!first && reserve) trace({ kind: 'ready', afterMs: performance.now() - startedAt, bufferedMs });
+      const packets = pending; pending = []; pendingSeconds = 0; refilling = false;
+      for (const packet of packets) {
         stage = 'schedule';
         // Backpressure bounds scheduled nodes and browser memory while the
         // server spools remaining PCM to disk.
@@ -135,8 +138,9 @@ export async function playAgentSpeech(
         node.connect(context.destination);
         if (!first) end = context.currentTime + (options.initialBufferSeconds ?? 0.8);
         else if (end < context.currentTime) {
-          trace({ kind: 'underrun', gapMs: (context.currentTime - end) * 1000, refillMs: 300 });
-          end = context.currentTime + 0.3;
+          const lead = reserve ? options.initialBufferSeconds ?? .04 : .3;
+          trace({ kind: 'underrun', gapMs: (context.currentTime - end) * 1000, refillMs: lead * 1000, ...(reserve ? { bufferedMs } : {}) });
+          end = context.currentTime + lead;
         }
         first ||= end;
         node.start(end);
@@ -146,10 +150,25 @@ export async function playAgentSpeech(
         nodes.add(node);
         node.onended = () => { nodes.delete(node); node.disconnect(); };
       }
+    };
+    while (!playbackSignal.aborted) {
+      stage = 'read';
+      const { value, done } = await nextAudio(reader, playbackSignal);
+      checkContext();
+      if (done) break;
+      stage = 'decode';
+      const packets = decoder.push(value);
+      for (const packet of packets) {
+        if (!firstPcm) { firstPcm = true; trace({ kind: 'first', afterMs: performance.now() - startedAt, sampleRate: packet.sampleRate }); }
+        pending.push(packet); pendingSeconds += packet.samples.length / packet.sampleRate;
+      }
+      if (reserve && first && end < context.currentTime && context.state === 'running') refilling = true;
+      await flush(decoder.ended);
     }
     checkContext();
     stage = 'decode';
     decoder.finish();
+    await flush(true);
     if (!first) throw new Error('Speech completed without audio');
     // Completion is the end of playback, not receipt of the final PCM frame.
     stage = 'drain';

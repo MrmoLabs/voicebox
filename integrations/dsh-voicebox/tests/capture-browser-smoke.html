@@ -7,6 +7,9 @@
 <h2>过渡音故障检查</h2><p>同样只使用全零音频，检查真实音频上下文中的正常收尾、关闭、暂停恢复和取消，不调用语音服务或模型。</p>
 <button id="transition">运行六项过渡音检查</button><pre id="transition-result">尚未运行</pre>
 <script type="module" src="/transition-check.js"></script>
+<h2>连续播报储备检查</h2><p>使用全零 PCM 与受控到达间隔，对比单纯延迟开播和实际蓄音的断流情况；不调用模型，不验证扬声器听感。</p>
+<button id="continuity">运行三项连续性检查</button><pre id="continuity-result">尚未运行</pre>
+<script type="module" src="/continuity-check.js"></script>
 <script type="module">
 import { openMicrophone } from '/capture.js';
 const assert = (value, message) => { if (!value) throw Error(message); };

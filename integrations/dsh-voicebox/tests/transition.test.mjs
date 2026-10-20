@@ -4,6 +4,7 @@ import { TransitionAudio } from '../src/transition-audio.js';
 import { loadTransition, playTransition, transitionKey } from '../src/transition-speech.js';
 import { SentenceQueue } from '../src/sentences.js';
 import { DesktopSpeechController } from '../src/controller.js';
+import { LiveNarration } from '../src/live.js';
 
 const tick = () => new Promise(resolve => setImmediate(resolve));
 test('cached waiting clips are bounded, spaced, interruptible and never synthesized in a gap', async t => {
@@ -128,11 +129,21 @@ test('waiting boundaries are published only after the preceding answer audio has
   assert.deepEqual(boundaries, [undefined, '逗号处还有下半句，']);
 });
 
+test('clause punctuation permits a cached bridge while a hard text cut does not', async () => {
+  for (const [text, safe] of [['这里已经说完一个语义分句，', true], ['举例之前有一个提示：', true], ['只是长度上限切开的半句', false]]) {
+    const boundaries = [];
+    const bridge = { epochs: new Map(), speak: async () => ({ id: 'piece' }) };
+    const live = new LiveNarration(bridge, { play: async () => {}, update() {}, failed(error) { throw error; }, preparing: boundary => boundaries.push(boundary) });
+    live.ensureQueue({ id: 's' }, 1); live.queue.enqueue(text, 'first'); await live.idle();
+    assert.equal(boundaries.at(-1), safe); live.reset();
+  }
+});
+
 test('the production controller warms idle audio, yields hints to PCM and input, and never counts a hint as delivered content', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   storage(t); localStorage.setItem('dsh-voicebox:s', 'on');
   const priorAudio = globalThis.AudioContext, priorTransport = globalThis.__DSH_TRANSPORT__;
-  let activeNodes = 0, hintStarts = 0, pendingInput = false, releaseBody;
+  let activeNodes = 0, hintStarts = 0, pendingInput = false, releaseBody, releaseReserve;
   globalThis.AudioContext = class {
     state = 'running'; currentTime = 1; destination = {};
     async resume() {} async close() { this.state = 'closed'; }
@@ -156,9 +167,12 @@ test('the production controller warms idle audio, yields hints to PCM and input,
   const session = store({ running: false, pendingSubmissions: [], subagent: null });
   const source = store({ revision: 0, entries: [], change: { kind: 'replace' } });
   const ctx = { sessions: { list: store({ byId: { s: {} } }), binding: () => ({ session, eventSource: source }) } };
-  const form = store({ value: { profile: 'voice-a', modelSize: '1.7B', recognitionLanguage: 'zh', readingMode: 'streaming', transitionSounds: true } });
+  // Config forms can omit default-valued recognitionLanguage/transitionSounds.
+  const form = store({ value: { profile: 'voice-a', modelSize: '1.7B', readingMode: 'streaming' } });
   const controller = new DesktopSpeechController(ctx, async (_job, _url, _signal, update, options) => {
-    options.trace({ kind: 'first', afterMs: 1, sampleRate: 8000 }); update(1, false);
+    options.trace({ kind: 'first', afterMs: 1, sampleRate: 8000 });
+    await new Promise(resolve => { releaseReserve = resolve; });
+    options.trace({ kind: 'ready', afterMs: 5, bufferedMs: 800 }); update(1, false);
     await new Promise(resolve => { releaseBody = resolve; });
   }, form);
   controller.select('s'); await controller.unlock();
@@ -174,6 +188,8 @@ test('the production controller warms idle audio, yields hints to PCM and input,
   assert.equal(controller.delivery.snapshot().pending, 0); assert.deepEqual(controller.delivery.snapshot().completedSteps, []);
   const cachedRequests = speech.length;
   emit('assistant/message', { turn: 1, step: 1, message: { id: 'answer', content: [{ type: 'text', text: '这是一段用于测试正文优先播放并且不被等待提示打断的完整回答。' }] } });
+  await tick(); assert.equal(controller.state.transitionPlaying, true, 'the first PCM packet alone must not cut off the waiting cue');
+  releaseReserve();
   await tick(); t.mock.timers.tick(25); await tick();
   assert.equal(activeNodes, 0); assert.equal(controller.state.transitionPlaying, false);
   controller.update({ phase: 'buffering' }); t.mock.timers.tick(3000); await tick();

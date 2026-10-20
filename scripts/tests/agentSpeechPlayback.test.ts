@@ -1,6 +1,98 @@
 import { expect, test } from 'bun:test';
 import { playAgentSpeech, type SpeechPlaybackTrace } from '../../app/src/lib/audio/agentSpeechPlayback';
 
+test('streaming preroll waits for actual PCM, then keeps packet scheduling contiguous', async () => {
+  const starts: number[] = [], trace: SpeechPlaybackTrace[] = [];
+  let stream!: ReadableStreamDefaultController<Uint8Array>;
+  const context = {
+    state: 'running', currentTime: 10, destination: {},
+    createBuffer(_channels: number, count: number, rate: number) { return { duration: count / rate, getChannelData: () => new Float32Array(count) }; },
+    createBufferSource() { return { connect() {}, disconnect() {}, start(at: number) { starts.push(at); }, stop() {} }; },
+  };
+  const packet = (seconds: number) => {
+    const bytes = new Uint8Array(8 + Math.round(seconds * 8000) * 4), view = new DataView(bytes.buffer);
+    view.setUint32(0, 8000, true); view.setUint32(4, (bytes.length - 8) / 4, true); return bytes;
+  };
+  const abort = new AbortController();
+  const body = new ReadableStream<Uint8Array>({ start(controller) { stream = controller; controller.enqueue(packet(.2)); } });
+  const task = playAgentSpeech({ generation_id: 'preroll', stream_audio: true }, 'http://fixture', abort.signal, () => {}, {
+    context: context as unknown as AudioContext, resume: false, initialBufferSeconds: .04, bufferedStartSeconds: .6,
+    fetch: (async () => new Response(body)) as typeof fetch, trace: event => trace.push(event),
+  });
+  const settled = task.catch(error => error);
+  try {
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(starts).toEqual([]);
+    expect(trace.map(event => event.kind)).toEqual(['first']);
+    context.currentTime = 10.4; stream.enqueue(packet(.4));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(starts).toHaveLength(2); expect(starts[0]).toBeCloseTo(10.44); expect(starts[1]).toBeCloseTo(10.64);
+    expect(trace.find(event => event.kind === 'ready')).toMatchObject({ bufferedMs: 600 });
+    context.currentTime = 10.7; stream.enqueue(packet(.6)); stream.enqueue(new Uint8Array(8)); stream.close();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(starts[2]).toBeCloseTo(11.04);
+    context.currentTime = 12; expect(await settled).toBeUndefined();
+    expect(trace.some(event => event.kind === 'underrun')).toBe(false);
+    expect(trace.at(-1)).toMatchObject({ kind: 'completed', audioMs: 1200 });
+  } finally { abort.abort(); await settled; }
+});
+
+test('a short completed utterance flushes below preroll, while cancellation discards pending PCM', async () => {
+  for (const complete of [true, false]) {
+    let starts = 0, cancelled = 0;
+    const context = {
+      state: 'running', currentTime: 10, destination: {},
+      createBuffer(_channels: number, count: number, rate: number) { return { duration: count / rate, getChannelData: () => new Float32Array(count) }; },
+      createBufferSource() { return { connect() {}, disconnect() {}, start() { starts++; }, stop() {} }; },
+    };
+    const bytes = new Uint8Array(8 + 1600 * 4 + (complete ? 8 : 0)), view = new DataView(bytes.buffer);
+    view.setUint32(0, 8000, true); view.setUint32(4, 1600, true);
+    const body = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(bytes); if (complete) controller.close(); }, cancel() { cancelled++; } });
+    const abort = new AbortController(), trace: SpeechPlaybackTrace[] = [];
+    const task = playAgentSpeech({ generation_id: 'short', stream_audio: true }, 'http://fixture', abort.signal, () => {}, {
+      context: context as unknown as AudioContext, resume: false, initialBufferSeconds: .04, bufferedStartSeconds: .8,
+      fetch: (async () => new Response(body)) as typeof fetch, trace: event => trace.push(event),
+    }).catch(error => error);
+    try {
+      await new Promise(resolve => setTimeout(resolve, 20));
+      expect(starts).toBe(complete ? 1 : 0);
+      if (complete) { context.currentTime = 11; expect(await task).toBeUndefined(); expect(trace.find(event => event.kind === 'ready')).toMatchObject({ bufferedMs: 200 }); }
+      else { abort.abort(); expect((await task).name).toBe('AbortError'); expect(cancelled).toBe(1); expect(trace.some(event => event.kind === 'ready')).toBe(false); }
+    } finally { abort.abort(); await task; }
+  }
+});
+
+test('a starved stream refills with actual PCM instead of restarting on another tiny packet', async () => {
+  const starts: number[] = [], trace: SpeechPlaybackTrace[] = [];
+  let stream!: ReadableStreamDefaultController<Uint8Array>;
+  const context = {
+    state: 'running', currentTime: 10, destination: {},
+    createBuffer(_channels: number, count: number, rate: number) { return { duration: count / rate, getChannelData: () => new Float32Array(count) }; },
+    createBufferSource() { return { connect() {}, disconnect() {}, start(at: number) { starts.push(at); }, stop() {} }; },
+  };
+  const packet = (seconds: number) => {
+    const bytes = new Uint8Array(8 + Math.round(seconds * 8000) * 4), view = new DataView(bytes.buffer);
+    view.setUint32(0, 8000, true); view.setUint32(4, (bytes.length - 8) / 4, true); return bytes;
+  };
+  const body = new ReadableStream<Uint8Array>({ start(controller) { stream = controller; stream.enqueue(packet(.6)); } });
+  const abort = new AbortController();
+  const task = playAgentSpeech({ generation_id: 'refill', stream_audio: true }, 'http://fixture', abort.signal, () => {}, {
+    context: context as unknown as AudioContext, resume: false, initialBufferSeconds: .04, bufferedStartSeconds: .6,
+    fetch: (async () => new Response(body)) as typeof fetch, trace: event => trace.push(event),
+  }).catch(error => error);
+  try {
+    await new Promise(resolve => setTimeout(resolve, 20)); expect(starts).toHaveLength(1);
+    context.currentTime = 11; stream.enqueue(packet(.2));
+    await new Promise(resolve => setTimeout(resolve, 20)); expect(starts).toHaveLength(1);
+    context.currentTime = 11.2; stream.enqueue(packet(.4));
+    await new Promise(resolve => setTimeout(resolve, 20)); expect(starts).toHaveLength(3);
+    expect(starts[1]).toBeCloseTo(11.24); expect(starts[2]).toBeCloseTo(11.44);
+    expect(trace.filter(event => event.kind === 'underrun')).toHaveLength(1);
+    stream.enqueue(new Uint8Array(8)); stream.close(); context.currentTime = 12;
+    expect(await task).toBeUndefined();
+  } finally { abort.abort(); await task; }
+});
+
 test('a queued PCM piece preserves a suspended shared context and abort stops scheduled nodes', async () => {
   let resumed = 0, stopped = 0, started = 0;
   const trace: SpeechPlaybackTrace[] = [];

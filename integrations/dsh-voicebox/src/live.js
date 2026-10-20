@@ -1,5 +1,8 @@
 import { SentenceBuffer, SentenceQueue } from './sentences.js';
 
+// A comma/colon already closes a spoken clause; a hard length cut does not.
+const speechBoundary = previous => !previous || /[。！？!?；;，,：:][”’」』）)]*$/u.test(previous.text);
+
 /** Live attempt/turn ownership sits above the existing scoped speech transport. */
 export class LiveNarration {
   constructor(bridge, { play, update, failed, delivery, preparing, trace = () => {}, voiceMode = () => false }) {
@@ -105,7 +108,7 @@ export class LiveNarration {
       queued: item => this.delivery?.enqueue(item),
       playing: item => this.delivery?.playing(item),
       played: item => this.delivery?.played(item),
-      preparing: previous => this.preparing?.(!previous || /[。！？!?；;][”’」』）)]*$/u.test(previous.text)),
+      preparing: previous => this.preparing?.(speechBoundary(previous)),
       prepare: item => {
         if (this.queue !== queue) return;
         this.trace('text.queued', { characters: item.text.length, parts: item.parts?.length || 1 });
@@ -113,7 +116,7 @@ export class LiveNarration {
         return this.bridge.speak(session.id, item.id, item.text, epoch, { notify: false });
       },
       play: generation => this.play(generation),
-      waiting: () => { if (this.queue === queue) { this.preparing?.(!queue.lastPlayed || /[。！？!?；;][”’」』）)]*$/u.test(queue.lastPlayed.text)); this.update({ waitingForText: true, phase: 'buffering' }); } },
+      waiting: () => { if (this.queue === queue) { this.preparing?.(speechBoundary(queue.lastPlayed)); this.update({ waitingForText: true, phase: 'buffering' }); } },
       drained: () => { if (this.queue === queue) this.update({ activeMessageId: undefined, activeTurn: undefined, phase: 'idle', elapsed: 0 }); },
       error: error => { if (this.queue === queue) this.fail(session, turn, error); },
     });
