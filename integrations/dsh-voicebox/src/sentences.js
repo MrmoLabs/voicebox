@@ -91,7 +91,7 @@ export class SentenceBuffer {
   settle(text) { this.raw = text; this.finish(); }
 }
 
-/** One playing job + one prepared job; at most eight bounded text batches. */
+/** One playing job + one prepared job; pending text has a total character cap. */
 export class SentenceQueue {
   constructor({ prepare, play, waiting, drained, error, longForm = false, queued, playing, played, preparing }) {
     Object.assign(this, { prepare, play, waiting, drained, error, longForm, queued, playing, played, preparing });
@@ -99,20 +99,21 @@ export class SentenceQueue {
   }
   enqueue(text, id, meta = {}) {
     if (this.cancelled || this.closed || !text) return;
-    const coalesce = !this.longForm && this.pending.length >= 8;
-    this.characters += text.length + Number(coalesce);
-    if (this.characters > (this.longForm ? 200_000 : 10_000)) throw new Error('本次朗读达到文本保护上限，尚未完整播放');
-    if (coalesce) this.pending.at(-1).text += `\n${text}`;
-    else { const item = { text, id, ...meta }; this.pending.push(item); this.queued?.(item); }
+    const characters = this.characters + text.length;
+    if (characters > (this.longForm ? 200_000 : 10_000)) throw new Error('本次朗读达到文本保护上限，尚未完整播放');
+    this.characters = characters;
+    const item = { text, id, ...meta }; this.pending.push(item); this.queued?.(item);
     this.prime(); this.run();
   }
   prime() {
     if (this.next || !this.pending.length || this.cancelled) return;
     let item = this.pending.shift();
-    if (this.longForm) {
+    {
       const parts = [item];
       // Only combine text already waiting, within one durable model step.
-      // First sound never waits for a larger batch; synthesis stays <=80 chars.
+      // First sound never waits for a larger batch. Ordinary auto-reading must
+      // keep the same bound: an oversized tail hides internal model restarts
+      // from read-ahead, reserve adaptation and individual playback receipts.
       while (this.pending.length && this.pending[0].turn === item.turn && this.pending[0].step === item.step
         && item.text.length + 1 + this.pending[0].text.length <= 80) {
         const next = this.pending.shift(); parts.push(next);

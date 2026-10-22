@@ -135,7 +135,24 @@ test('a host without transient frames falls back to the settled text even withou
   await h.bridge.dispose();
 });
 
-test('long backlog is bounded and prepared failures are caught while the previous job is playing', async () => {
+test('ordinary automatic reading retains clause ownership and bounded batches under a fast long answer', async () => {
+  const prepared = [], heard = [], releases = [];
+  const queue = new SentenceQueue({
+    prepare: async item => { prepared.push(item); return item; },
+    play: async item => { if (item.id === 'first') await new Promise(resolve => releases.push(resolve)); },
+    played: item => heard.push(...(item.parts || [item]).map(part => part.id)),
+    waiting() {}, drained() {}, error(error) { throw error; },
+  });
+  queue.enqueue(sentence('first'), 'first', { turn: 1, step: 1 }); await tick();
+  for (let n = 0; n < 30; n++) queue.enqueue(sentence(n), `clause-${n}`, { turn: 1, step: n < 20 ? 1 : 2 });
+  queue.finish(); releases.shift()(); await queue.idle();
+  assert.ok(prepared.every(item => item.text.length <= 80), 'Backlog must not become a multi-hundred-character request with hidden internal handoffs');
+  assert.ok(prepared.length < 31, 'Already waiting clauses can share synthesis to reduce repeated model setup');
+  assert.deepEqual(heard, ['first', ...Array.from({ length: 30 }, (_, n) => `clause-${n}`)], 'Every original clause is acknowledged exactly once');
+  assert.ok(prepared.every(item => (item.parts || [item]).every(part => part.step === item.step)), 'Never batch across model steps');
+});
+
+test('long backlog remains within the text budget and prepared failures are caught while the previous job is playing', async () => {
   let release, caught;
   const queue = new SentenceQueue({
     prepare: async item => { if (item.id === 'fail') throw new Error('prepare failed'); return item; },
@@ -144,8 +161,8 @@ test('long backlog is bounded and prepared failures are caught while the previou
   queue.enqueue('first', 'ok'); await tick();
   queue.enqueue('next', 'fail');
   for (let n = 0; n < 30; n++) queue.enqueue('pending', `p-${n}`);
-  assert.ok(queue.pending.length <= 8);
-  assert.equal(queue.characters, 'first'.length + 'next'.length + 30 * 'pending'.length + 22, 'coalesced newlines count toward the backend character limit');
+  assert.equal(queue.characters, 'first'.length + 'next'.length + 30 * 'pending'.length);
+  assert.throws(() => queue.enqueue('x'.repeat(10_001), 'oversized'), /保护上限/);
   await tick(); release(); await queue.idle();
   assert.match(caught.message, /prepare failed/);
   assert.equal(queue.cancelled, true);

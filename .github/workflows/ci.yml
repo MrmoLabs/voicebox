@@ -35,7 +35,7 @@ jobs:
         run: bun run --cwd app build
 
       - name: Shared playback and history regression
-        run: bun test scripts/tests/agentSpeechPlayback.test.ts scripts/tests/agentSpeechQueue.test.ts scripts/tests/pcmPackets.test.ts scripts/tests/historyReconciliation.test.ts
+        run: bun test scripts/tests/agentSpeechPlayback.test.ts scripts/tests/agentSpeechQueue.test.ts scripts/tests/pcmPackets.test.ts scripts/tests/historyReconciliation.test.ts scripts/tests/speechPlayerComparison.test.ts
 
   dsh-voice-plugin:
     strategy:

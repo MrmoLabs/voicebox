@@ -119,6 +119,10 @@ export async function playAgentSpeech(
     // Opt-in actual PCM reserve. The legacy scheduling lead is unchanged for
     // other clients; a lead alone cannot protect against a late second packet.
     const reserve = Number.isFinite(options.bufferedStartSeconds) ? Math.max(0, Math.min(3, options.bufferedStartSeconds!)) : 0;
+    // Match Voicebox's 20 ms scheduling tolerance. A tiny carrier/clock delay
+    // must not turn into waiting for another full reserve. Clamp late starts
+    // to now so subsequent nodes cannot overlap the delayed packet's samples.
+    const refillTolerance = reserve ? .02 : 0;
     let pending: ReturnType<PcmPacketDecoder['push']> = [], pendingSeconds = 0, refilling = false;
     const flush = async (complete = false) => {
       if (!pending.length || ((!first || refilling) && pendingSeconds + 1e-6 < reserve && !complete)) return;
@@ -138,9 +142,12 @@ export async function playAgentSpeech(
         node.connect(context.destination);
         if (!first) end = context.currentTime + (options.initialBufferSeconds ?? 0.8);
         else if (end < context.currentTime) {
-          const lead = reserve ? options.initialBufferSeconds ?? .04 : .3;
-          trace({ kind: 'underrun', gapMs: (context.currentTime - end) * 1000, refillMs: lead * 1000, ...(reserve ? { bufferedMs } : {}) });
-          end = context.currentTime + lead;
+          if (context.currentTime - end <= refillTolerance) end = context.currentTime;
+          else {
+            const lead = reserve ? options.initialBufferSeconds ?? .04 : .3;
+            trace({ kind: 'underrun', gapMs: (context.currentTime - end) * 1000, refillMs: lead * 1000, ...(reserve ? { bufferedMs } : {}) });
+            end = context.currentTime + lead;
+          }
         }
         first ||= end;
         node.start(end);
@@ -162,7 +169,7 @@ export async function playAgentSpeech(
         if (!firstPcm) { firstPcm = true; trace({ kind: 'first', afterMs: performance.now() - startedAt, sampleRate: packet.sampleRate }); }
         pending.push(packet); pendingSeconds += packet.samples.length / packet.sampleRate;
       }
-      if (reserve && first && end < context.currentTime && context.state === 'running') refilling = true;
+      if (reserve && first && end + refillTolerance < context.currentTime && context.state === 'running') refilling = true;
       await flush(decoder.ended);
     }
     checkContext();
