@@ -8,6 +8,7 @@ import { VoiceContext } from '../src/voice-context.js';
 import { VoiceboxProxy } from '../src/proxy.js';
 import { SentenceQueue } from '../src/sentences.js';
 import { SpeechBridge } from '../src/bridge.js';
+import { LiveNarration } from '../src/live.js';
 
 const frame = value => new Float32Array(320).fill(value);
 test('normal 2-second hesitations and the old 20-second limit no longer send a turn', () => {
@@ -463,6 +464,68 @@ test('speech anchors retain an unfinished batch and remain conservative for miss
   assert.equal(remainingSpeech('重复。重复。后文。', { recent: '重复。' }).text, '重复。重复。后文。');
   assert.equal(remainingSpeech(source, { current: '不属于原答复' }).text, source);
   assert.equal(remainingSpeech('甲。\n乙。', { recent: '甲。', current: '乙。' }).text, '乙。');
+});
+
+test('a generated answer interrupted inside a merged playback batch resumes its actual unheard tail', { timeout: 3000 }, async t => {
+  const h = host(); h.context.install(); await h.send('start');
+  const delivery = new DeliveryLedger(), entered = [], releases = [];
+  const first = Promise.withResolvers(), second = Promise.withResolvers();
+  let live, sequence = 0;
+  const schema = { paths: { '/speak': { post: {} }, '/speak/cancel': { post: {} }, '/generate/{generation_id}/live': { get: {} } },
+    components: { schemas: { SpeakRequest: { properties: { request_id: {}, stream_audio: {}, preview_mode: {}, playback_owner: {} } } } } };
+  const bridge = new SpeechBridge({}, {
+    onInterrupt: () => live?.reset(),
+    fetch: async url => Response.json(url.endsWith('/openapi.json') ? schema : { id: `generation-${sequence++}` }),
+  });
+  live = new LiveNarration(bridge, {
+    delivery, update() {}, failed: state => assert.fail(state.error),
+    play: generation => {
+      const release = Promise.withResolvers(); releases.push(release);
+      entered.push(generation); (entered.length === 1 ? first : second).resolve();
+      return release.promise;
+    },
+  });
+  t.after(async () => { live.reset(); for (const release of releases) release.resolve(); h.context.dispose(); await bridge.dispose(); });
+  const intro = '先说明这个平台的基本用途，它把代码管理和开发者之间的协作联系在一起。';
+  const repository = '接下来介绍仓库的用途，它会保存文件和修改历史，方便之后查看和维护。';
+  const collaboration = '然后说明协作流程，参与者先提交自己的改动，再通过审查讨论合并方案。';
+  const personal = '最后介绍个人用途，你可以用它管理项目，也可以学习其他人的实现方法。';
+  const ending = '这些用途已经介绍完毕，你现在更想从哪个方向继续深入了解呢？';
+  const source = `**${intro}**\n\n${repository}\n\n${collaboration}\n\n${personal}\n\n${ending}`;
+  const emit = (type, data) => {
+    const event = { seq: h.session.log.length + 1, type, data };
+    h.session.log.push(event); h.context.observe(h.session, event); live.handle(h.session, event);
+  };
+  emit('turn/start', { turn: 1 });
+  emit('user/message', { source: { kind: 'user' }, content: [{ type: 'text', text: '简单介绍这个平台的用途。' }] });
+  emit('assistant/message', { turn: 1, step: 1, message: { id: 'original', content: [{ type: 'text', text: source }] } });
+  emit('turn/end', { turn: 1, reason: { kind: 'completed' } });
+  await first.promise; releases[0].resolve(); await second.promise;
+  const interruption = delivery.snapshot();
+  assert.match(interruption.recent, /先说明这个平台/);
+  assert.match(interruption.current, /介绍仓库/);
+  assert.match(interruption.current, /说明协作流程/);
+  assert.ok([...delivery.segments.values()].filter(item => item.status === 'playing').length > 1);
+  assert.deepEqual(interruption.completedSteps, [], 'generated and sealed does not mean played');
+  const interruptedQueue = live.queue;
+  live.reset(); delivery.interrupt(); releases[1].resolve();
+  await interruptedQueue.idle();
+  await h.send('update', { playback: delivery.snapshot(), interruption: { sequence: 1, playback: interruption } });
+  h.context.observe(h.session, { seq: h.session.log.length + 1, type: 'user/message',
+    data: { source: { kind: 'user' }, content: [{ type: 'text', text: '等等，修改历史是什么意思？' }] } });
+  const plan = h.context.state('s').returnPlan;
+  assert.deepEqual(plan.units.map(unit => unit.text), [repository, collaboration, personal, ending]);
+  assert.equal(plan.mode, 'resume');
+  h.context.observe(h.session, { type: 'turn/start', data: { turn: 2 } });
+  const local = { type: 'assistant/message', data: { turn: 2, step: 1,
+    message: { content: [{ type: 'text', text: '修改历史就是每次变更的记录。' }] } } };
+  h.session.log.push(local); h.context.observe(h.session, local);
+  await h.tools.get('voicebox_branch').execute({ action: 'resume' }, { agent: h.agent });
+  const prompt = h.context.context(h.agent);
+  assert.match(prompt, /待解释 u1.*接下来介绍仓库/s);
+  assert.doesNotMatch(prompt, /待解释 u2|现在更想从哪个方向/);
+  assert.equal(plan.complete(), false);
+  assert.deepEqual(delivery.snapshot().completedSteps, [], 'late player completion cannot acknowledge cancelled batches');
 });
 
 test('interruption positions reject malformed metadata and stop discards the pending target', async () => {
