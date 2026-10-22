@@ -50,6 +50,7 @@ from .configuration_qwen3_tts import (Qwen3TTSConfig,
                                       Qwen3TTSSpeakerEncoderConfig,
                                       Qwen3TTSTalkerCodePredictorConfig,
                                       Qwen3TTSTalkerConfig)
+from .sdpa import qwen_sdpa_attention_forward
 
 logger = logging.get_logger(__name__)
 
@@ -860,7 +861,9 @@ class Qwen3TTSTalkerAttention(nn.Module):
             key_states, value_states = past_key_values.update(key_states, value_states, self.layer_idx, cache_kwargs)
 
         attention_interface: Callable = eager_attention_forward
-        if self.config._attn_implementation != "eager":
+        if self.config._attn_implementation == "sdpa":
+            attention_interface = qwen_sdpa_attention_forward
+        elif self.config._attn_implementation != "eager":
             attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
 
         attn_output, attn_weights = attention_interface(
@@ -1013,7 +1016,9 @@ class Qwen3TTSAttention(nn.Module):
             key_states, value_states = past_key_values.update(key_states, value_states, self.layer_idx, cache_kwargs)
 
         attention_interface: Callable = eager_attention_forward
-        if self.config._attn_implementation != "eager":
+        if self.config._attn_implementation == "sdpa":
+            attention_interface = qwen_sdpa_attention_forward
+        elif self.config._attn_implementation != "eager":
             attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
 
         attn_output, attn_weights = attention_interface(

@@ -32,6 +32,7 @@ tests = ['test_live_audio', 'test_generation_progress', 'test_generation_progres
 tests += ['test_speak_dispatch', 'test_speak_language', 'test_mcp_speak']
 tests += ['test_qwen_stream_sampling']
 tests += ['test_qwen_fast_codebook']
+tests += ['test_qwen_sdpa']
 tests += ['test_speech_quality', 'test_generation_cancel']
 if __name__ == '__main__':
     sys.exit(pytest.main((sys.argv[1:] or [f'backend/tests/{test}.py' for test in tests]) +
