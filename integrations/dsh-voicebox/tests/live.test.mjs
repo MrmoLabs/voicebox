@@ -31,7 +31,7 @@ test('sentence cursor survives fragmented fences, links, inline code, comments a
   assert.throws(() => { const huge = new SentenceBuffer(() => {}); huge.append('x'.repeat(30_001)); }, /过长/);
 });
 
-function setup() {
+function setup(options = {}) {
   const requests = [], plays = [], releases = [], states = [];
   const session = { id: 's', header: {}, firstLiveSeq: 0 };
   let live, state = {}, seq = 10, attempt = 'attempt-1';
@@ -45,6 +45,7 @@ function setup() {
     },
   });
   live = new LiveNarration(bridge, {
+    ...options,
     update: values => { state = { ...state, ...values }; states.push(state); },
     failed: values => { state = { ...state, ...values }; states.push(state); },
     play: async generation => { plays.push(generation.id); await new Promise(resolve => releases.push(resolve)); },
@@ -65,6 +66,16 @@ test('checked narration can start at a natural clause without creating an oversi
   assert.equal(pieces[0], '这是流式语音的实际验收。文字可以一次输入，');
   assert.equal(pieces.join(''), text);
   assert.ok(pieces.every(piece => piece.length <= 80));
+});
+
+test('the next prepared generation opens read-ahead before the current piece finishes', async () => {
+  const prefetched = [];
+  const h = setup({ prefetch: generation => prefetched.push(generation.id) });
+  h.begin(); h.chunk({ type: 'text-delta', index: 0, text: sentence(1) }); await tick();
+  h.chunk({ type: 'text-delta', index: 0, text: sentence(2) }); await tick();
+  assert.deepEqual(h.plays, ['g-1']);
+  assert.deepEqual(prefetched, ['g-1', 'g-2'], 'PCM transport must overlap the preceding playback');
+  h.live.reset(); h.releases.shift()(); await h.bridge.dispose();
 });
 
 test('first sentence starts before turn end; only one ahead is prepared; final settlement never replays text', async () => {

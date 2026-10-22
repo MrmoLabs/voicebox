@@ -111,6 +111,30 @@ function store(value) {
   return { getSnapshot: () => value, subscribe: (fn) => { listeners.add(fn); return () => listeners.delete(fn); }, set(next) { value = next; for (const fn of listeners) fn(); } };
 }
 
+test('changing synthesis settings discards prefetched old-voice bytes and stops the current owner', async t => {
+  const previousAudio = globalThis.AudioContext, previousTransport = globalThis.__DSH_TRANSPORT__;
+  t.after(() => { globalThis.AudioContext = previousAudio; globalThis.__DSH_TRANSPORT__ = previousTransport; });
+  globalThis.AudioContext = class { state = 'running'; async resume() {} async close() { this.state = 'closed'; } };
+  let sourceCancelled = 0, sourceSignal, playingSignal;
+  globalThis.__DSH_TRANSPORT__ = { fetch: async (_url, init) => {
+    sourceSignal = init.signal;
+    return new Response(new ReadableStream({ start(stream) { stream.enqueue(new Uint8Array([1])); }, cancel() { sourceCancelled++; } }));
+  } };
+  const form = store({ value: { profile: 'old', patience: 'balanced' } });
+  const controller = new DesktopSpeechController({}, async (_job, _base, signal) => {
+    playingSignal = signal; await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }));
+  }, form);
+  await controller.unlock();
+  const playing = controller.playGeneration({ id: 'current' }, true);
+  controller.readAhead.prepare({ id: 'future' }); await tick();
+  form.set({ value: { profile: 'old', patience: 'patient' } }); await tick();
+  assert.equal(sourceSignal.aborted, false); assert.equal(playingSignal.aborted, false, 'Input patience does not invalidate speech PCM');
+  form.set({ value: { profile: 'new', patience: 'patient' } }); await tick();
+  assert.equal(sourceSignal.aborted, true); assert.equal(playingSignal.aborted, true);
+  assert.equal(sourceCancelled, 1); assert.equal(form.getSnapshot().value.profile, 'new');
+  await playing; await controller.dispose();
+});
+
 test('Desktop keeps manual and automatic speech in the background, stops on submit and session switch, and never replays restored replies', async (t) => {
   const previous = Object.fromEntries(['window', 'document', 'localStorage', 'AudioContext', '__DSH_TRANSPORT__'].map((key) => [key, globalThis[key]]));
   t.after(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete globalThis[key]; else globalThis[key] = value; } });

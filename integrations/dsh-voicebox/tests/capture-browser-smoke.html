@@ -10,6 +10,9 @@
 <h2>连续播报储备检查</h2><p>使用全零 PCM 与受控到达间隔，对比单纯延迟开播和实际蓄音的断流情况；不调用模型，不验证扬声器听感。</p>
 <button id="continuity">运行三项连续性检查</button><pre id="continuity-result">尚未运行</pre>
 <script type="module" src="/continuity-check.js"></script>
+<h2>下一段音频预读</h2>
+<button id="read-ahead">运行两项预读检查</button><pre id="read-ahead-result">尚未运行</pre>
+<script type="module" src="/read-ahead-check.js"></script>
 <script type="module">
 import { openMicrophone } from '/capture.js';
 const assert = (value, message) => { if (!value) throw Error(message); };

@@ -5,8 +5,8 @@ const speechBoundary = previous => !previous || /[。！？!?；;，,：:][”�
 
 /** Live attempt/turn ownership sits above the existing scoped speech transport. */
 export class LiveNarration {
-  constructor(bridge, { play, update, failed, delivery, preparing, trace = () => {}, voiceMode = () => false }) {
-    Object.assign(this, { bridge, play, update, failed, delivery, preparing, trace, voiceMode });
+  constructor(bridge, { play, prefetch, update, failed, delivery, preparing, trace = () => {}, voiceMode = () => false }) {
+    Object.assign(this, { bridge, play, prefetch, update, failed, delivery, preparing, trace, voiceMode });
   }
   reset() { this.queue?.cancel(); this.queue = undefined; this.attempt = undefined; this.blocked = undefined; this.finished = false; this.messageId = undefined; }
   fail(session, turn, error) {
@@ -109,11 +109,14 @@ export class LiveNarration {
       playing: item => this.delivery?.playing(item),
       played: item => this.delivery?.played(item),
       preparing: previous => this.preparing?.(speechBoundary(previous)),
-      prepare: item => {
+      prepare: async item => {
         if (this.queue !== queue) return;
         this.trace('text.queued', { characters: item.text.length, parts: item.parts?.length || 1 });
         this.update({ waitingForText: false });
-        return this.bridge.speak(session.id, item.id, item.text, epoch, { notify: false });
+        const generation = await this.bridge.speak(session.id, item.id, item.text, epoch, { notify: false });
+        if (this.queue !== queue || queue.cancelled || !generation) return;
+        this.prefetch?.(generation);
+        return generation;
       },
       play: generation => this.play(generation),
       waiting: () => { if (this.queue === queue) { this.preparing?.(speechBoundary(queue.lastPlayed)); this.update({ waitingForText: true, phase: 'buffering' }); } },

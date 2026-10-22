@@ -11,8 +11,8 @@ import { encodeWav } from '../src/capture.js';
 import { PcmPacketDecoder } from '../../../app/src/lib/audio/pcmPackets.ts';
 import { playAgentSpeech } from '../../../app/src/lib/audio/agentSpeechPlayback.ts';
 
-const [permission, destination, roundsText = '10'] = process.argv.slice(2);
-if (permission !== '--run' || !destination) throw new Error('Opt-in: bun tests/local-roundtrip-smoke.mjs --run <output-directory> [rounds]');
+const [permission, destination, roundsText = '10', profile] = process.argv.slice(2);
+if (permission !== '--run' || !destination) throw new Error('Opt-in: bun tests/local-roundtrip-smoke.mjs --run <output-directory> [rounds] [voice-name-or-id]');
 const rounds = Number(roundsText);
 assert(Number.isInteger(rounds) && rounds >= 1 && rounds <= 30);
 const output = path.resolve(destination), base = 'http://127.0.0.1:17493';
@@ -30,7 +30,7 @@ async function requireIdle() {
 await requireIdle();
 const health = await get('/health');
 assert(health.model_loaded && ['0.6B', '1.7B'].includes(health.model_size), 'Use the already loaded Qwen model; do not switch or download models');
-const settings = { clientId: 'dsh-voicebox', modelSize: health.model_size, speechMode: 'realtime', readingMode: 'complete',
+const settings = { clientId: 'dsh-voicebox-local-roundtrip', profile, modelSize: health.model_size, speechMode: 'realtime', readingMode: 'complete', transitionSounds: false,
   recognitionModel: 'turbo', recognitionLanguage: 'zh', recognitionScript: 'simplified', backgroundListening: true, allowInterrupt: false };
 const proxy = new VoiceboxProxy(settings);
 const sessionId = `local-roundtrip-${crypto.randomUUID()}`;

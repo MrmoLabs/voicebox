@@ -5,6 +5,7 @@ import { VoiceDiagnostics } from './telemetry.js';
 import { TransitionAudio } from './transition-audio.js';
 import { loadTransition, playTransition, transitionKey, TRANSITION_TEXT } from './transition-speech.js';
 import { VOICE_DEFAULTS } from './voice-config.js';
+import { SpeechReadAhead } from './read-ahead.js';
 
 /** Consume only new durable deltas; restored history is available for manual read. */
 export class ReplyObserver {
@@ -53,6 +54,8 @@ export function speechFetch(input, init) {
   return send(path, init);
 }
 
+const synthesisKey = value => JSON.stringify(['endpoint', 'clientId', 'profile', 'modelSize', 'language', 'speechMode'].map(key => value?.[key] || ''));
+
 export class DesktopSpeechController {
   constructor(ctx, play, form) {
     this.ctx = ctx;
@@ -63,6 +66,7 @@ export class DesktopSpeechController {
     this.delivery = new DeliveryLedger();
     this.diagnostics = new VoiceDiagnostics();
     this.playSequence = 0;
+    this.readAhead = new SpeechReadAhead(speechFetch);
     this.state = { enabled: false, voiceActive: false, phase: 'idle', elapsed: 0, latest: '', activeMessageId: undefined, error: '' };
     this.messages = new Map();
     this.form = form;
@@ -79,12 +83,15 @@ export class DesktopSpeechController {
     });
     this.configureTransitions();
     this.readingMode = form?.getSnapshot().value?.readingMode || 'complete';
+    this.synthesisKey = synthesisKey(form?.getSnapshot().value);
     this.recordSettings = () => this.trace('settings.runtime', {
       modelSize: '0.6B', speechMode: 'realtime', readingMode: this.readingMode, recognitionModel: 'turbo',
       patience: 'balanced', allowInterrupt: false, backgroundListening: true, ...form?.getSnapshot().value,
     });
     this.recordSettings();
     this.offSettings = form?.subscribe(() => {
+      const key = synthesisKey(form.getSnapshot().value);
+      if (key !== this.synthesisKey) { this.synthesisKey = key; this.stop(); }
       const mode = form.getSnapshot().value?.readingMode || 'complete';
       if (mode !== this.readingMode) { this.stop(); this.readingMode = mode; }
       this.recordSettings();
@@ -100,6 +107,7 @@ export class DesktopSpeechController {
     });
     this.live = new LiveNarration(this.bridge, {
       play: generation => this.playGeneration(generation, true),
+      prefetch: generation => this.readAhead.prepare(generation),
       update: values => this.update({ ...values, ...(this.userPaused && values.phase === 'buffering' ? { phase: 'paused' } : {}) }),
       failed: values => this.update(values),
       voiceMode: () => this.state.voiceActive,
@@ -247,6 +255,7 @@ export class DesktopSpeechController {
     this.audioEpoch++;
     this.live?.reset();
     this.playAbort?.abort(); this.playAbort = undefined;
+    this.readAhead.clear();
     this.userPaused = false;
     this.playbackHolds.clear();
     this.update({ activeMessageId: undefined, activeTurn: undefined, playbackText: '', inputHeld: false, live: false, waitingForText: false, phase: 'idle', elapsed: 0, error: '', transitionPlaying: false, transitionText: '' });
@@ -276,7 +285,7 @@ export class DesktopSpeechController {
       if (this.audio.state !== 'running' && !this.playbackPaused()) throw new Error('请点击回复下方的“朗读”启用音频播放');
       await this.play({ generation_id: generation.id, stream_audio: true }, 'http://voicebox.invalid', abort.signal,
         (elapsed, buffering = false) => { if (!abort.signal.aborted) { this.hasPlaybackProgress = true; this.update({ elapsed: offset + elapsed, phase: this.audio.state === 'suspended' ? 'paused' : buffering ? 'buffering' : 'playing' }); } },
-        { fetch: speechFetch, context: this.audio, resume: false, initialBufferSeconds: .04, bufferedStartSeconds: reserve,
+        { fetch: this.readAhead.fetch, context: this.audio, resume: false, initialBufferSeconds: .04, bufferedStartSeconds: reserve,
           trace: event => {
             if (event.kind === 'ready') { this.voiceAudioPending = false; this.atSpeechBoundary = false; this.transitions.audioReady(); }
             if (event.kind === 'underrun') { starved = true; this.streamReserveSeconds = Math.min(2.4, Math.max(reserve * 1.5, event.gapMs / 1000 + .3)); }
