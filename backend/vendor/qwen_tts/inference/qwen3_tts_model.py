@@ -767,6 +767,7 @@ class Qwen3TTSModel:
         max_frames: int = 10000,
         # Optimization
         use_optimized_decode: bool = True,
+        steady_emit_every_frames: Optional[int] = None,
         **kwargs,
     ) -> Generator[Tuple[np.ndarray, int], None, None]:
         """
@@ -788,6 +789,7 @@ class Qwen3TTSModel:
             max_frames: Maximum codec frames to generate.
             use_optimized_decode: Use CUDA graph optimized decode when available (default True).
                                   Call enable_streaming_optimizations() first for best performance.
+            steady_emit_every_frames: Optional emission interval after the first chunk.
             **kwargs: Generation parameters (do_sample, top_k, top_p, temperature, etc.)
 
         Yields:
@@ -868,6 +870,7 @@ class Qwen3TTSModel:
             overlap_samples=overlap_samples,
             max_frames=max_frames,
             use_optimized_decode=use_optimized_decode,
+            steady_emit_every_frames=steady_emit_every_frames,
             **gen_kwargs,
         ):
             yield chunk, sr

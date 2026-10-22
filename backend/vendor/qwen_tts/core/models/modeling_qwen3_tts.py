@@ -2639,6 +2639,7 @@ class Qwen3TTSForConditionalGeneration(Qwen3TTSPreTrainedModel, GenerationMixin)
         max_frames: int = 10000,
         # Optimization flags
         use_optimized_decode: bool = True,
+        steady_emit_every_frames: Optional[int] = None,
     ) -> Generator[tuple[np.ndarray, int], None, None]:
         """
         Stream audio generation, yielding PCM chunks as they are generated.
@@ -2662,12 +2663,19 @@ class Qwen3TTSForConditionalGeneration(Qwen3TTSPreTrainedModel, GenerationMixin)
             overlap_samples: Overlap samples for crossfade between chunks
             max_frames: Maximum number of codec frames to generate
             use_optimized_decode: Use CUDA graph optimized decode when available (default True)
+            steady_emit_every_frames: Optional cadence after the first chunk; keeps
+                first-chunk latency while reducing repeated rolling-window decodes.
 
         Yields:
             tuple[np.ndarray, int]: (pcm_chunk as float32 array, sample_rate)
         """
         if max_frames <= 0:
             raise ValueError("max_frames must be positive")
+        steady_frames = emit_every_frames if steady_emit_every_frames is None else steady_emit_every_frames
+        for name, frames in (("emit_every_frames", emit_every_frames),
+                             ("steady_emit_every_frames", steady_frames)):
+            if isinstance(frames, bool) or not isinstance(frames, int) or not 1 <= frames <= decode_window_frames:
+                raise ValueError(f"{name} must be a positive integer no larger than decode_window_frames")
         repetition_processor = RepetitionPenaltyLogitsProcessor(repetition_penalty)
 
         # Build talker inputs
@@ -2797,8 +2805,10 @@ class Qwen3TTSForConditionalGeneration(Qwen3TTSPreTrainedModel, GenerationMixin)
             )
 
             frames_since_emit += 1
-            if frames_since_emit < emit_every_frames:
+            cadence = emit_every_frames if total_frames_emitted == 0 else steady_frames
+            if frames_since_emit < cadence:
                 continue
+            emitted_frames = frames_since_emit
             frames_since_emit = 0
 
             # Decode window of codec frames to PCM
@@ -2827,7 +2837,7 @@ class Qwen3TTSForConditionalGeneration(Qwen3TTSPreTrainedModel, GenerationMixin)
             # Extract only new samples (tail of decoded window)
             # Use fixed upsample rate to avoid floating-point drift
             samples_per_frame = self.speech_tokenizer.get_decode_upsample_rate()
-            step_samples = samples_per_frame * emit_every_frames
+            step_samples = samples_per_frame * emitted_frames
             chunk = wav[-step_samples:] if step_samples > 0 else wav
 
             # Crossfade with previous chunk tail for smooth transition

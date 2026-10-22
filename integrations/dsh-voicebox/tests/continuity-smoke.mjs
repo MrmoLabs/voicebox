@@ -7,11 +7,13 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { SentenceBuffer, SentenceQueue } from '../src/sentences.js';
 import { PcmPacketDecoder } from '../../../app/src/lib/audio/pcmPackets.ts';
 
-const [profile, output, model = '1.7B', flow = 'streaming'] = process.argv.slice(2);
-if (!profile || !output) throw new Error('Usage: node tests/continuity-smoke.mjs <profile-id> <output.json> [model-size]');
+const [profile, output, model = '1.7B', flow = 'streaming', length = '170'] = process.argv.slice(2);
+if (!profile || !output) throw new Error('Usage: node tests/continuity-smoke.mjs <profile-id> <output.json> [model-size] [streaming|voice] [characters]');
+const characters = Number(length);
+assert(Number.isInteger(characters) && characters >= 1 && characters <= 1000, 'Choose 1–1000 fixed test characters');
 const endpoint = 'http://127.0.0.1:17493';
 const paragraph = '这是流式语音的实际验收。文字可以一次输入，声音会在后面的内容生成完成以前开始返回。我们检查每一段声音的顺序和长度，观察长文本是否需要持续等待。如果模型暂时跟不上播放，播放器会显示缓冲状态；任务成功以后，完整音频仍然保存在历史记录中。';
-const text = paragraph.repeat(2).slice(0, 170);
+const text = paragraph.repeat(Math.ceil(characters / paragraph.length)).slice(0, characters);
 const pieces = [], jobs = [];
 let failure, end = 0, totalGap = 0;
 const started = performance.now();
@@ -67,7 +69,7 @@ assert.equal(pieces.join(''), text);
 const result = { characters: text.length, model, flow, first_pcm_seconds: jobs[0].first_pcm,
   first_scheduled_sound_seconds: jobs[0].scheduled_start, total_simulated_gap_seconds: totalGap,
   wall_seconds: seconds(), pieces, jobs,
-  note: 'Real /speak PCM and production sentence queue; silent virtual playback, all answer text supplied upfront. No microphone or physical speaker measurement.' };
+  note: 'Real /speak PCM and production sentence queue; legacy 0.8s/0.04s scheduling simulation, not the current reserve-aware scheduler. All answer text supplied upfront. No microphone or physical speaker measurement.' };
 await mkdir(path.dirname(path.resolve(output)), { recursive: true });
 await writeFile(output, JSON.stringify(result, null, 2), 'utf8');
 console.log(JSON.stringify({ ...result, pieces: undefined, jobs: undefined }));
