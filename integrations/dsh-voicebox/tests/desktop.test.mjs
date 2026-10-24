@@ -156,7 +156,8 @@ test('Desktop keeps manual and automatic speech in the background, stops on subm
     await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
   });
   controller.select('s1');
-  assert.equal(controller.state.latest, 'History'); assert.equal(calls.length, 0);
+  assert.equal(controller.state.latest, 'History');
+  assert.deepEqual(calls.map(call => call.path), ['/warmup'], 'restoration may prepare the engine but must not synthesize history');
   assert.equal(controller.messageText('message-History'), 'History');
   controller.audio = new AudioContext();
   events.set(snapshot(2, [start, user, reply('Fresh'), end]));

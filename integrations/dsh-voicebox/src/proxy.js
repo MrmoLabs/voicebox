@@ -1,5 +1,6 @@
 import { WhisperInput } from './listening.js';
 import { checkInstallation } from './diagnostics.js';
+import { warmSpeech } from './warmup.js';
 
 /** Exact Connection route: works over Desktop IPC and authenticated Web HTTP. */
 export class VoiceboxProxy {
@@ -29,6 +30,25 @@ export class VoiceboxProxy {
         const signal = AbortSignal.any([request.signal, this.abort.signal, AbortSignal.timeout(15_000)]);
         return json(await checkInstallation(this.config, this.endpoint, this.fetcher, signal));
       } catch { return json({ error: '安装检查已取消或超时，请稍后重试。' }, 502); }
+    }
+    if (path === '/warmup' && request.method === 'POST') {
+      let identity;
+      try {
+        const raw = await request.text();
+        if (raw.length > 1000) return json({ error: 'Warmup identity is too large' }, 413);
+        identity = JSON.parse(raw);
+      } catch { return json({ error: 'Invalid warmup identity' }, 400); }
+      if (!identity || Object.keys(identity).some(key => key !== 'session_id') || typeof identity.session_id !== 'string' || !identity.session_id || identity.session_id.length > 200) return json({ error: 'Invalid warmup identity' }, 400);
+      if (this.config.sessionIds?.length && !this.config.sessionIds.includes(identity.session_id)) return json({ error: 'Session is not enabled for speech' }, 403);
+      try {
+        if (!this.warmupFlight) {
+          const signal = AbortSignal.any([this.abort.signal, AbortSignal.timeout(90_000)]);
+          const work = warmSpeech(this.config, this.endpoint, this.fetcher, signal);
+          this.warmupFlight = work;
+          void work.finally(() => { if (this.warmupFlight === work) this.warmupFlight = undefined; }).catch(() => {});
+        }
+        return json(await this.warmupFlight);
+      } catch { return json({ ready: false, skipped: 'unavailable' }); }
     }
     let body;
     let liveId;

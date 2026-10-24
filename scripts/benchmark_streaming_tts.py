@@ -58,6 +58,8 @@ def main():
                         help="Isolated experiment: retain one producer thread across backend utterances")
     parser.add_argument("--expand-gqa", action="store_true",
                         help="Isolated experiment: use Transformers' explicit KV repetition before SDPA")
+    parser.add_argument("--prewarm", action="store_true",
+                        help="Finish one silent production warmup before timing the first reply")
     args = parser.parse_args()
     if any(count < 0 or count > 64 for count in args.threads):
         parser.error("--threads must be between 0 and 64")
@@ -67,9 +69,16 @@ def main():
         parser.error("Choose one Talker compilation experiment")
     if args.persistent_inference_worker and args.paths != ['backend']:
         parser.error("--persistent-inference-worker requires --paths backend")
+    if args.prewarm and args.paths != ['backend']:
+        parser.error("--prewarm requires --paths backend")
+    if args.prewarm and (len(args.threads) != 1 or len(args.precisions) != 1):
+        parser.error("--prewarm requires one thread count and precision per process")
     if len(set(args.threads)) > 1 and (args.optimization != "0" or args.talker_compile or args.talker_pointwise_compile or args.decoder_compile):
         parser.error("Compiled thread comparisons require a fresh process per thread count to avoid compiler cache exhaustion")
     faulthandler.enable()
+    if args.prewarm:
+        faulthandler.dump_traceback_later(90, repeat=True)
+        atexit.register(faulthandler.cancel_dump_traceback_later)
     args.output.mkdir(parents=True, exist_ok=True)
     workspace = Path(__file__).resolve().parents[1]
     portable = args.portable_root
@@ -116,6 +125,9 @@ def main():
             SDPBackend.EFFICIENT_ATTENTION, SDPBackend.MATH,
         ], set_priority=True))
     native_threads = torch.get_num_threads()
+    if args.prewarm:
+        torch.set_num_threads(args.threads[0] or native_threads)
+        torch.set_float32_matmul_precision(args.precisions[0])
     class CompilerLimits(logging.Handler):
         count = 0
 
@@ -189,6 +201,15 @@ def main():
         attention_scope.callback(setattr, pytorch_backend, 'asyncio', original_asyncio)
     backend = PyTorchTTSBackend(args.model_size)
     backend.model, backend._current_model_size = model, args.model_size
+    preparation_seconds = 0.0
+    if args.prewarm:
+        async def prepare():
+            async for _ in backend.generate_stream("语音预热测试。", prompt, language='zh', seed=42):
+                pass
+        preparation_started = time.perf_counter()
+        asyncio.run(prepare())
+        preparation_seconds = time.perf_counter() - preparation_started
+        print(f"silent preparation: {preparation_seconds:.3f}s", flush=True)
     stream_call = model.stream_generate_voice_clone
 
     def configured_stream(*positional, **keywords):
@@ -225,8 +246,11 @@ def main():
              for text_index, text in enumerate(texts) for run in range(args.runs) for precision in args.precisions
              for steady in args.steady_frames for route in args.paths for threads in args.threads]
     for index, (fast, frames, steady, precision, route, threads, text_index, text, run) in enumerate(tests):
-        torch.set_num_threads(threads)
-        torch.set_float32_matmul_precision(precision)
+        # Do not reset the CPU pool after inference has already used workers.
+        if torch.get_num_threads() != threads:
+            torch.set_num_threads(threads)
+        if torch.get_float32_matmul_precision() != precision:
+            torch.set_float32_matmul_precision(precision)
         model.model.talker.enable_fast_codebook_gen(fast)
         decode_times.clear()
         codebook_times.clear()
@@ -297,6 +321,7 @@ def main():
             "sdpa_backend": args.sdpa_backend,
             "persistent_inference_worker": args.persistent_inference_worker,
             "expand_gqa": args.expand_gqa,
+            "prewarm": args.prewarm, "preparation_seconds": preparation_seconds,
             "windows_fused_sdpa_policy": _WINDOWS_WITHOUT_FLASH,
             "sdpa_priority": torch._C._get_sdp_priority_order(),
             "cudnn_sdpa_enabled": torch.backends.cuda.cudnn_sdp_enabled(),

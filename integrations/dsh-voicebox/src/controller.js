@@ -1,7 +1,7 @@
 import { SpeechBridge, spokenText } from './bridge.js';
 import { LiveNarration } from './live.js';
 import { DeliveryLedger } from './delivery.js';
-import { VoiceDiagnostics } from './telemetry.js';
+import { VoiceDiagnostics, diagnosticNow } from './telemetry.js';
 import { TransitionAudio } from './transition-audio.js';
 import { loadTransition, playTransition, transitionKey, TRANSITION_TEXT } from './transition-speech.js';
 import { VOICE_DEFAULTS } from './voice-config.js';
@@ -91,7 +91,7 @@ export class DesktopSpeechController {
     this.recordSettings();
     this.offSettings = form?.subscribe(() => {
       const key = synthesisKey(form.getSnapshot().value);
-      if (key !== this.synthesisKey) { this.synthesisKey = key; this.stop(); }
+      if (key !== this.synthesisKey) { this.synthesisKey = key; this.cancelWarmup(); this.stop(); }
       const mode = form.getSnapshot().value?.readingMode || 'complete';
       if (mode !== this.readingMode) { this.stop(); this.readingMode = mode; }
       this.recordSettings();
@@ -125,6 +125,35 @@ export class DesktopSpeechController {
   trace(event, values) { this.diagnostics.record(event, values); }
   subscribe = (listener) => { this.listeners.add(listener); return () => this.listeners.delete(listener); };
   playbackPaused() { return this.userPaused || this.playbackHolds.size > 0; }
+  cancelWarmup() { this.warmupAbort?.abort(); this.warmupAbort = undefined; this.warmupFlight = undefined; }
+  warmSpeech() {
+    if (this.warmupFlight) return this.warmupFlight;
+    if (this.disposed || !this.sessionId || (!this.state.enabled && !this.state.voiceActive)) return;
+    const session = this.ctx.sessions.binding(this.sessionId).session.getSnapshot();
+    if (session.subagent || session.removed || session.running || session.awaitingFirstTurn || session.pendingSubmissions?.length
+      || this.state.phase !== 'idle' || this.ctx.sessions.list.getSnapshot().byId[this.sessionId]?.origin === 'subagent') return;
+    const abort = new AbortController(), started = diagnosticNow();
+    this.warmupAbort = abort;
+    this.trace('speech.warmup', { state: 'start' });
+    const work = (async () => {
+      try {
+        const response = await speechFetch('http://voicebox.invalid/warmup', { method: 'POST',
+          headers: { 'content-type': 'application/json' }, body: JSON.stringify({ session_id: this.sessionId }),
+          signal: AbortSignal.any([abort.signal, AbortSignal.timeout(90_000)]),
+        });
+        const result = await response.json();
+        if (this.warmupAbort === abort && !abort.signal.aborted) this.trace('speech.warmup', {
+          state: response.ok && result?.ready ? 'ready' : 'skipped', durationMs: diagnosticNow() - started,
+        });
+      } catch {
+        if (this.warmupAbort === abort && !abort.signal.aborted) this.trace('speech.warmup', { state: 'failed', durationMs: diagnosticNow() - started });
+      } finally {
+        if (this.warmupAbort === abort) { this.warmupAbort = undefined; this.warmupFlight = undefined; }
+      }
+    })();
+    this.warmupFlight = work;
+    return work;
+  }
   configureTransitions() {
     const settings = { ...VOICE_DEFAULTS, ...this.form?.getSnapshot().value };
     const key = transitionKey(settings);
@@ -162,6 +191,7 @@ export class DesktopSpeechController {
     if (id === this.sessionId) return;
     this.trace('session.changed');
     this.conversation?.end();
+    this.cancelWarmup();
     this.stop();
     this.offEvents?.(); this.offSession?.();
     this.sessionId = id;
@@ -217,6 +247,7 @@ export class DesktopSpeechController {
     this.offSession = binding.session.subscribe(() => {
       if (binding.session.getSnapshot().pendingSubmissions.length) this.stop();
     });
+    if (this.state.enabled) void this.warmSpeech();
   }
   ensureAudio() {
     if (!this.audio || this.audio.state === 'closed') { this.audio = new AudioContext(); this.audioUnlocked = false; }
@@ -232,12 +263,15 @@ export class DesktopSpeechController {
     else this.stop();
     localStorage.setItem(`dsh-voicebox:${this.sessionId}`, enabled ? 'on' : 'off');
     this.update({ enabled });
+    if (enabled) void this.warmSpeech();
+    else if (!this.state.voiceActive) this.cancelWarmup();
   }
   messageText(messageId) { return this.messages.get(messageId) || ''; }
   setVoiceActive(active) {
     this.stop();
     if (active) { this.transitions.failed = false; if (!this.form?.getSnapshot().value?.profile) this.transitions.cache.clear(); }
     this.update({ voiceActive: active });
+    if (!active && !this.state.enabled) this.cancelWarmup();
   }
   read(messageId) {
     const text = messageId === undefined ? this.state.latest : this.messageText(messageId);
@@ -347,6 +381,7 @@ export class DesktopSpeechController {
   }
   async dispose() {
     this.disposed = true;
+    this.cancelWarmup();
     this.conversation?.dispose();
     this.stop(); this.offEvents?.(); this.offSession?.(); this.offSettings?.();
     await this.bridge.dispose();

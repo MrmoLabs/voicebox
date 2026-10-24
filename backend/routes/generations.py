@@ -17,7 +17,7 @@ from ..services.generation import release_generation_memory, run_generation
 from ..services.task_queue import cancel_generation as cancel_generation_job, enqueue_generation
 from ..utils.audio import load_audio
 from ..utils.tasks import get_task_manager
-from ..utils.model_runtime import runtime_guard
+from ..utils.model_runtime import current_activity, runtime_guard
 
 logger = logging.getLogger(__name__)
 
@@ -167,9 +167,12 @@ async def generate_speech(
     return generation
 
 
+_live_warmup_flights = {}
+
+
 @router.post("/profiles/{profile_id}/live-warmup")
 async def warm_live_preview(profile_id: str, model_size: Literal["1.7B", "0.6B"] = "1.7B",
-                            db: Session = Depends(get_db)):
+                            db: Session = Depends(get_db), only_if_cold: bool = False):
     """Warm real PCM inference through the serial worker; no history/audio playback."""
     from ..backends import get_tts_backend_for_engine, load_engine_model
 
@@ -183,13 +186,41 @@ async def warm_live_preview(profile_id: str, model_size: Literal["1.7B", "0.6B"]
     backend = get_tts_backend_for_engine("qwen")
     if not str(getattr(backend, "device", "")).startswith("cuda"):
         raise HTTPException(status_code=400, detail="Live preview currently requires CUDA Qwen Base")
-    result = asyncio.get_running_loop().create_future()
+    loop = asyncio.get_running_loop()
+    key = (id(loop), profile_id, model_size)
+    if key in _live_warmup_flights:
+        return await asyncio.shield(_live_warmup_flights[key])
+    if only_if_cold:
+        if current_activity():
+            return {"ready": False, "skipped": "busy"}
+        loaded_size = getattr(backend, "_current_model_size", None)
+        if loaded_size and loaded_size != model_size:
+            return {"ready": False, "skipped": "different-model"}
+        if loaded_size == model_size and getattr(backend, "_inference_warmed", False):
+            return {"ready": True, "model_size": model_size}
+        cached = getattr(backend, "_is_model_cached", None)
+        if cached is None or not cached(model_size):
+            return {"ready": False, "skipped": "not-cached"}
+    if len(_live_warmup_flights) >= 8:
+        return {"ready": False, "skipped": "busy"}
+    result = loop.create_future()
+    _live_warmup_flights[key] = result
 
     @runtime_guard("预热语音")
     async def warm():
         warm_db = None
         try:
             warm_db = next(get_db())
+            # Recheck after joining the serial queue: another real reply may
+            # already have warmed inference, or selected a different model.
+            if only_if_cold:
+                loaded_size = getattr(backend, "_current_model_size", None)
+                if loaded_size and loaded_size != model_size:
+                    result.set_result({"ready": False, "skipped": "different-model"})
+                    return
+                if loaded_size == model_size and getattr(backend, "_inference_warmed", False):
+                    result.set_result({"ready": True, "model_size": model_size})
+                    return
             await load_engine_model("qwen", model_size)
             prompt = await profiles.create_voice_prompt_for_profile(profile_id, warm_db, engine="qwen")
             stream = backend.generate_stream("语音预热测试。", prompt, profile.language, 42)
@@ -206,8 +237,16 @@ async def warm_live_preview(profile_id: str, model_size: Literal["1.7B", "0.6B"]
         finally:
             if warm_db is not None:
                 warm_db.close()
+            if _live_warmup_flights.get(key) is result:
+                _live_warmup_flights.pop(key)
 
-    enqueue_generation(f"live-warmup-{uuid.uuid4()}", warm())
+    work = warm()
+    try:
+        enqueue_generation(f"live-warmup-{uuid.uuid4()}", work)
+    except BaseException:
+        work.close()
+        _live_warmup_flights.pop(key, None)
+        raise
     try:
         return await asyncio.shield(result)
     except Exception as error:

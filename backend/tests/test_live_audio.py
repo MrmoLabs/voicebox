@@ -170,6 +170,110 @@ async def test_warmup_uses_serial_worker_without_creating_history(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('condition,expected', [
+    ('hot', {'ready': True, 'model_size': '1.7B'}),
+    ('different', {'ready': False, 'skipped': 'different-model'}),
+    ('uncached', {'ready': False, 'skipped': 'not-cached'}),
+    ('busy', {'ready': False, 'skipped': 'busy'}),
+])
+async def test_cold_only_warmup_skips_existing_work_and_never_downloads(monkeypatch, condition, expected):
+    from unittest.mock import MagicMock, AsyncMock
+    from backend import backends
+    from backend.routes import generations
+
+    backend = SimpleNamespace(device='cuda:0', _current_model_size='0.6B' if condition == 'different' else '1.7B',
+                              _inference_warmed=condition == 'hot', _is_model_cached=lambda _: condition != 'uncached')
+    monkeypatch.setattr(backends, 'get_tts_backend_for_engine', lambda _: backend)
+    monkeypatch.setattr(generations.profiles, 'get_profile', AsyncMock(return_value=SimpleNamespace(language='zh')))
+    monkeypatch.setattr(generations.profiles, 'validate_profile_engine', lambda *_: None)
+    monkeypatch.setattr(generations, 'current_activity', lambda: 'real speech' if condition == 'busy' else None)
+    enqueue = MagicMock()
+    monkeypatch.setattr(generations, 'enqueue_generation', enqueue)
+    assert await generations.warm_live_preview('voice', '1.7B', MagicMock(), only_if_cold=True) == expected
+    enqueue.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cold_warmup_coalesces_callers_and_keeps_worker_after_one_waiter_leaves(monkeypatch):
+    from unittest.mock import MagicMock, AsyncMock
+    from backend import backends
+    from backend.routes import generations
+
+    entered, release = asyncio.Event(), asyncio.Event()
+    class Backend:
+        device = 'cuda:0'
+        _current_model_size = '1.7B'
+        _inference_warmed = False
+        def _is_model_cached(self, _):
+            return True
+        async def generate_stream(self, *args):
+            entered.set()
+            await release.wait()
+            yield np.zeros(100), 24000
+            self._inference_warmed = True
+
+    backend = Backend()
+    monkeypatch.setattr(backends, 'get_tts_backend_for_engine', lambda _: backend)
+    monkeypatch.setattr(backends, 'load_engine_model', AsyncMock())
+    monkeypatch.setattr(generations.profiles, 'get_profile', AsyncMock(return_value=SimpleNamespace(language='zh')))
+    monkeypatch.setattr(generations.profiles, 'validate_profile_engine', lambda *_: None)
+    prompt = AsyncMock(return_value={})
+    monkeypatch.setattr(generations.profiles, 'create_voice_prompt_for_profile', prompt)
+    db = MagicMock()
+    monkeypatch.setattr(generations, 'get_db', lambda: iter([db]))
+    work = []
+    monkeypatch.setattr(generations, 'enqueue_generation', lambda _, coro: work.append(asyncio.create_task(coro)))
+    first = asyncio.create_task(generations.warm_live_preview('voice', '1.7B', db, only_if_cold=True))
+    await asyncio.wait_for(entered.wait(), 2)
+    second = asyncio.create_task(generations.warm_live_preview('voice', '1.7B', db, only_if_cold=True))
+    await asyncio.sleep(0)
+    first.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+    assert len(work) == 1 and not work[0].done()
+    release.set()
+    assert await second == {'ready': True, 'model_size': '1.7B'}
+    await asyncio.gather(*work)
+    assert not generations._live_warmup_flights
+    prompt.assert_awaited_once()
+    assert not db.add.called and not db.commit.called
+    assert await generations.warm_live_preview('voice', '1.7B', db, only_if_cold=True) == {'ready': True, 'model_size': '1.7B'}
+    assert len(work) == 1, 'a warmed backend must not synthesize a second preparation clip'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('changed_size,warmed,expected', [
+    ('0.6B', False, {'ready': False, 'skipped': 'different-model'}),
+    ('1.7B', True, {'ready': True, 'model_size': '1.7B'}),
+])
+async def test_queued_cold_preparation_rechecks_model_ownership(monkeypatch, changed_size, warmed, expected):
+    from unittest.mock import MagicMock, AsyncMock
+    from backend import backends
+    from backend.routes import generations
+
+    backend = SimpleNamespace(device='cuda:0', _current_model_size='1.7B',
+                              _inference_warmed=False, _is_model_cached=lambda _: True)
+    monkeypatch.setattr(backends, 'get_tts_backend_for_engine', lambda _: backend)
+    load = AsyncMock()
+    monkeypatch.setattr(backends, 'load_engine_model', load)
+    monkeypatch.setattr(generations.profiles, 'get_profile', AsyncMock(return_value=SimpleNamespace(language='zh')))
+    monkeypatch.setattr(generations.profiles, 'validate_profile_engine', lambda *_: None)
+    db = MagicMock()
+    monkeypatch.setattr(generations, 'get_db', lambda: iter([db]))
+    queued = []
+    monkeypatch.setattr(generations, 'enqueue_generation', lambda _, coro: queued.append(coro))
+    caller = asyncio.create_task(generations.warm_live_preview('voice', '1.7B', db, only_if_cold=True))
+    await asyncio.sleep(0)
+    assert len(queued) == 1
+    backend._current_model_size, backend._inference_warmed = changed_size, warmed
+    await queued[0]
+    assert await caller == expected
+    load.assert_not_awaited()
+    db.close.assert_called_once()
+    assert not generations._live_warmup_flights
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize('custom_device,allowed', [(False, True), (True, False)])
 async def test_default_channel_allows_live_preview_custom_device_rejected(monkeypatch, custom_device, allowed):
     from unittest.mock import AsyncMock, MagicMock

@@ -7,6 +7,15 @@ export function supportsSpeech(schema) {
     && Object.entries(schema?.paths || {}).some(([path, methods]) => /^\/generate\/\{[^}]+\}\/live$/.test(path) && methods?.get);
 }
 
+export function configuredProfile(config, profiles, bindings, captures) {
+  if (!Array.isArray(profiles)) return;
+  const find = value => value ? profiles.find(item => item.id === value) || profiles.find(item => item.name === value) : undefined;
+  if (config.profile) return find(config.profile);
+  if (!Array.isArray(bindings?.items)) return;
+  const binding = bindings.items.find(item => item.client_id === (config.clientId || 'dsh-voicebox'));
+  return find(binding?.profile_id) || find(captures?.default_playback_voice_id);
+}
+
 /** Read-only metadata checks. Never load a model, download weights or open audio. */
 export async function checkInstallation(config, endpoint, fetcher, signal) {
   const checks = [];
@@ -46,11 +55,8 @@ export async function checkInstallation(config, endpoint, fetcher, signal) {
   }
   if (!Array.isArray(profiles)) add('profile', 'error', '无法读取声音档案，请在 Voicebox 检查。');
   else {
-    const find = value => value ? profiles.find(item => item.id === value) || profiles.find(item => item.name === value) : undefined;
     const bindingAvailable = Array.isArray(bindings?.items);
-    const binding = bindingAvailable ? bindings.items.find(item => item.client_id === (config.clientId || 'dsh-voicebox')) : undefined;
-    const selected = config.profile ? find(config.profile)
-      : find(binding?.profile_id) || (bindingAvailable ? find(captures?.default_playback_voice_id) : undefined);
+    const selected = configuredProfile(config, profiles, bindings, captures);
     if (selected) add('profile', !selected.voice_type || selected.voice_type === 'cloned' ? 'pass' : 'error',
       !selected.voice_type || selected.voice_type === 'cloned' ? '所选或默认声音档案可用于 Qwen Base。' : '当前声音档案不适用于 Qwen Base，请选择克隆声音。');
     else if (!config.profile && (!bindingAvailable || !captures)) add('profile', 'warning', '默认声音未能确认，请选择一个明确的声音档案后重新检查。');

@@ -158,6 +158,7 @@ export class VoiceConversation {
       this.microphone = microphone;
       this.signalTimer = setInterval(() => this.publishInputSignal(), 1000); this.signalTimer.unref?.();
       this.update({ phase: 'listening', echoCancellation: this.microphone.echoCancellation, recognitionModel: status.model || this.settings().recognitionModel });
+      void this.speaker.warmSpeech?.();
       this.onVisibility();
       // A fresh idle call has no outgoing answer echo to drain. Once it says
       // listening, accept the first words rather than discarding them for 350 ms.
