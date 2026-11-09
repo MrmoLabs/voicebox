@@ -1,4 +1,35 @@
 {
+  "startup": {
+    "title": "正在启动 Voicebox",
+    "slowTitle": "启动耗时较长，仍在检查",
+    "slowDescription": "本地服务尚未响应。冷启动时导入依赖可能需要几分钟，我们会继续自动检查。",
+    "errorTitle": "语音服务未能启动",
+    "errorDescription": "服务启动时出现错误。可以展开下方详情查看原因，然后重试。",
+    "waitingTitle": "语音服务暂未响应",
+    "waitingDescription": "等待较长时间后，自动检查已暂停。可以再次检查，或展开详情排查原因。",
+    "working": "正在启动本地服务",
+    "paused": "已暂停等待",
+    "elapsed": "已等待 {{time}}",
+    "progress": "语音服务正在启动",
+    "automatic": "服务响应后会自动进入应用。启动时长因设备而异。",
+    "help": "启动详情中可查看最新日志和错误信息。",
+    "details": "查看启动详情",
+    "noLogs": "正在等待本次启动的首条日志，服务可能仍在导入依赖。",
+    "retry": "重试",
+    "checkAgain": "再次检查",
+    "steps": {
+      "launch": "启动本地服务",
+      "database": "打开声音资料库",
+      "runtime": "初始化音频运行环境",
+      "connect": "确认服务可用"
+    },
+    "descriptions": {
+      "launch": "正在启动本地服务并导入运行依赖。",
+      "database": "正在打开本地声音资料库。",
+      "runtime": "正在准备音频运行环境并检查设备。",
+      "connect": "正在等待服务通过健康检查。"
+    }
+  },
   "common": {
     "cancel": "取消",
     "save": "保存",

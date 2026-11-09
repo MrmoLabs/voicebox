@@ -1,4 +1,35 @@
 {
+  "startup": {
+    "title": "Starting Voicebox",
+    "slowTitle": "Startup is taking a little longer",
+    "slowDescription": "The local service has not responded yet. Cold dependency imports can take several minutes. We are still checking automatically.",
+    "errorTitle": "The voice service could not start",
+    "errorDescription": "The service reported a startup error. Open the details below, then try again.",
+    "waitingTitle": "The voice service has not responded yet",
+    "waitingDescription": "Automatic checks have paused after an extended wait. Check again or open the details to investigate.",
+    "working": "Starting local service",
+    "paused": "Waiting paused",
+    "elapsed": "Elapsed {{time}}",
+    "progress": "Voice service startup in progress",
+    "automatic": "Voicebox will open automatically when the service responds. Duration varies by device.",
+    "help": "Startup details include the latest logs and any reported error.",
+    "details": "Startup details",
+    "noLogs": "Waiting for the first log from this startup. The service may still be importing dependencies.",
+    "retry": "Try again",
+    "checkAgain": "Check again",
+    "steps": {
+      "launch": "Launch local service",
+      "database": "Open voice library",
+      "runtime": "Initialize audio runtime",
+      "connect": "Confirm service is ready"
+    },
+    "descriptions": {
+      "launch": "Starting the local service and importing its dependencies.",
+      "database": "Opening your local voice library.",
+      "runtime": "Preparing the audio runtime and checking your device.",
+      "connect": "Waiting for the service to respond to a health check."
+    }
+  },
   "common": {
     "cancel": "Cancel",
     "save": "Save",

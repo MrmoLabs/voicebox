@@ -309,6 +309,37 @@ fn backend_version_compatible(app_version: &str, binary_version: Option<&str>) -
     app_series.len() == 2 && app_series == binary_series
 }
 
+fn forward_server_output(
+    app: tauri::AppHandle,
+    mut rx: tauri::async_runtime::Receiver<tauri_plugin_shell::process::CommandEvent>,
+) {
+    // Spawn task to continue reading output and emit to frontend
+    let app_handle = app;
+    tokio::spawn(async move {
+        while let Some(event) = rx.recv().await {
+            match event {
+                tauri_plugin_shell::process::CommandEvent::Stdout(line) => {
+                    let line_str = String::from_utf8_lossy(&line);
+                    println!("Server: {}", line_str);
+                    let _ = app_handle.emit("server-log", serde_json::json!({
+                        "stream": "stdout",
+                        "line": line_str.trim_end(),
+                    }));
+                }
+                tauri_plugin_shell::process::CommandEvent::Stderr(line) => {
+                    let line_str = String::from_utf8_lossy(&line);
+                    eprintln!("Server error: {}", line_str);
+                    let _ = app_handle.emit("server-log", serde_json::json!({
+                        "stream": "stderr",
+                        "line": line_str.trim_end(),
+                    }));
+                }
+                _ => {}
+            }
+        }
+    });
+}
+
 #[command]
 async fn start_server(
     app: tauri::AppHandle,
@@ -325,8 +356,12 @@ async fn start_server(
         }
     }
     // Check if server is already running (managed by this app instance)
-    if state.child.lock().unwrap().is_some() {
-        return Ok(format!("http://127.0.0.1:{}", SERVER_PORT));
+    let has_child = state.child.lock().unwrap().is_some();
+    if has_child {
+        if tokio::task::spawn_blocking(|| check_health(SERVER_PORT)).await.unwrap_or(false) {
+            return Ok(format!("http://127.0.0.1:{}", SERVER_PORT));
+        }
+        return Err("Server startup timeout: the existing backend is not responding yet. Open startup details to see its logs.".to_string());
     }
 
     // Check if a voicebox server is already running on our port (from previous session with keep_running=true,
@@ -349,13 +384,16 @@ async fn start_server(
                             println!("Found existing voicebox-server on port {} (PID: {}), reusing it", SERVER_PORT, pid);
                             // Store the PID so we can kill it on exit if needed
                             *state.server_pid.lock().unwrap() = Some(pid);
-                            return Ok(format!("http://127.0.0.1:{}", SERVER_PORT));
+                            if tokio::task::spawn_blocking(|| check_health(SERVER_PORT)).await.unwrap_or(false) {
+                                return Ok(format!("http://127.0.0.1:{}", SERVER_PORT));
+                            }
+                            return Err("Server startup timeout: the existing voice service is still starting.".to_string());
                         }
                     } else {
                         // Process name doesn't contain "voicebox" — could be an external
                         // Python/uvicorn/Docker server. Verify via HTTP health check.
                         println!("Port {} in use by '{}' (PID: {}), checking if it's a Voicebox server...", SERVER_PORT, command, pid_str);
-                        if check_health(SERVER_PORT) {
+                        if tokio::task::spawn_blocking(|| check_health(SERVER_PORT)).await.unwrap_or(false) {
                             println!("Health check passed — reusing external server on port {}", SERVER_PORT);
                             return Ok(format!("http://127.0.0.1:{}", SERVER_PORT));
                         }
@@ -382,12 +420,15 @@ async fn start_server(
             if let Some(pid) = find_voicebox_pid_on_port(SERVER_PORT) {
                 println!("Found existing voicebox-server on port {} (PID: {}), reusing it", SERVER_PORT, pid);
                 *state.server_pid.lock().unwrap() = Some(pid);
-                return Ok(format!("http://127.0.0.1:{}", SERVER_PORT));
+                if tokio::task::spawn_blocking(|| check_health(SERVER_PORT)).await.unwrap_or(false) {
+                    return Ok(format!("http://127.0.0.1:{}", SERVER_PORT));
+                }
+                return Err("Server startup timeout: the existing voice service is still starting.".to_string());
             }
             // Process name doesn't match — could be an external Python/Docker server.
             // Verify via HTTP health check before giving up.
             println!("Port {} in use by unknown process, checking if it's a Voicebox server...", SERVER_PORT);
-            if check_health(SERVER_PORT) {
+            if tokio::task::spawn_blocking(|| check_health(SERVER_PORT)).await.unwrap_or(false) {
                 println!("Health check passed — reusing external server on port {}", SERVER_PORT);
                 return Ok(format!("http://127.0.0.1:{}", SERVER_PORT));
             }
@@ -777,15 +818,25 @@ async fn start_server(
     *state.server_pid.lock().unwrap() = Some(process_pid);
     *state.child.lock().unwrap() = Some(child);
 
-    // Wait for server to be ready by listening for startup log
-    // PyInstaller bundles can be slow on first import, especially torch/transformers
-    let timeout = tokio::time::Duration::from_secs(120);
+    // Cold torch/transformers imports can take several minutes. Readiness is
+    // confirmed over HTTP, including when uvicorn's log lines are suppressed.
+    let timeout = tokio::time::Duration::from_secs(600);
     let start_time = tokio::time::Instant::now();
     let mut error_output = Vec::new();
+    let mut next_health_check = tokio::time::Instant::now();
 
     loop {
+        if tokio::time::Instant::now() >= next_health_check {
+            let healthy = tokio::task::spawn_blocking(|| check_health(SERVER_PORT))
+                .await.unwrap_or(false);
+            if healthy {
+                println!("Server is ready (health check passed)");
+                break;
+            }
+            next_health_check = tokio::time::Instant::now() + tokio::time::Duration::from_secs(2);
+        }
         if start_time.elapsed() > timeout {
-            eprintln!("Server startup timeout after 120 seconds");
+            eprintln!("Server startup timeout after 10 minutes");
             if !error_output.is_empty() {
                 eprintln!("Collected error output:");
                 for line in &error_output {
@@ -808,7 +859,8 @@ async fn start_server(
                 }
             }
 
-            return Err("Server startup timeout - check Console.app for detailed logs".to_string());
+            forward_server_output(app.clone(), rx);
+            return Err("Server startup wait limit reached after 10 minutes. Open startup details to see its logs.".to_string());
         }
 
         match tokio::time::timeout(tokio::time::Duration::from_millis(100), rx.recv()).await {
@@ -823,8 +875,7 @@ async fn start_server(
                         }));
 
                         if line_str.contains("Uvicorn running") || line_str.contains("Application startup complete") {
-                            println!("Server is ready!");
-                            break;
+                            next_health_check = tokio::time::Instant::now();
                         }
                     }
                     tauri_plugin_shell::process::CommandEvent::Stderr(line) => {
@@ -837,14 +888,27 @@ async fn start_server(
 
                         // Collect error lines for debugging
                         if line_str.contains("ERROR") || line_str.contains("Error") || line_str.contains("Failed") {
+                            if error_output.len() >= 20 { error_output.remove(0); }
                             error_output.push(line_str.clone());
                         }
 
                         // Uvicorn logs to stderr, so check there too
                         if line_str.contains("Uvicorn running") || line_str.contains("Application startup complete") {
-                            println!("Server is ready!");
-                            break;
+                            next_health_check = tokio::time::Instant::now();
                         }
+                    }
+                    #[cfg(not(debug_assertions))]
+                    tauri_plugin_shell::process::CommandEvent::Terminated(payload) => {
+                        state.child.lock().unwrap().take();
+                        state.server_pid.lock().unwrap().take();
+                        return Err(format!(
+                            "Server process exited during startup (exit code: {:?}). {} Open startup details to see its logs.",
+                            payload.code, error_output.join("\n")
+                        ));
+                    }
+                    tauri_plugin_shell::process::CommandEvent::Error(error) => {
+                        if error_output.len() >= 20 { error_output.remove(0); }
+                        error_output.push(error);
                     }
                     _ => {}
                 }
@@ -883,8 +947,9 @@ async fn start_server(
                 {
                     eprintln!("Server process ended unexpectedly during startup!");
                     eprintln!("The server binary may have crashed or exited with an error.");
-                    eprintln!("Check Console.app logs for more details (search for 'voicebox')");
-                    return Err("Server process ended unexpectedly".to_string());
+                    state.child.lock().unwrap().take();
+                    state.server_pid.lock().unwrap().take();
+                    return Err(format!("Server process ended unexpectedly. {} Open startup details to see its logs.", error_output.join("\n")));
                 }
             }
             Err(_) => {
@@ -894,31 +959,7 @@ async fn start_server(
         }
     }
 
-    // Spawn task to continue reading output and emit to frontend
-    let app_handle = app.clone();
-    tokio::spawn(async move {
-        while let Some(event) = rx.recv().await {
-            match event {
-                tauri_plugin_shell::process::CommandEvent::Stdout(line) => {
-                    let line_str = String::from_utf8_lossy(&line);
-                    println!("Server: {}", line_str);
-                    let _ = app_handle.emit("server-log", serde_json::json!({
-                        "stream": "stdout",
-                        "line": line_str.trim_end(),
-                    }));
-                }
-                tauri_plugin_shell::process::CommandEvent::Stderr(line) => {
-                    let line_str = String::from_utf8_lossy(&line);
-                    eprintln!("Server error: {}", line_str);
-                    let _ = app_handle.emit("server-log", serde_json::json!({
-                        "stream": "stderr",
-                        "line": line_str.trim_end(),
-                    }));
-                }
-                _ => {}
-            }
-        }
-    });
+    forward_server_output(app.clone(), rx);
 
     Ok(format!("http://127.0.0.1:{}", SERVER_PORT))
 }
